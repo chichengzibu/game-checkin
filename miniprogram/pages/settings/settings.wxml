@@ -1,0 +1,53 @@
+<view class="container">
+
+  <!-- 账号列表 -->
+  <view wx:for="{{accounts}}" wx:key="id" class="card">
+    <view class="acct-row">
+      <view class="acct-info">
+        <text class="acct-name">{{item.label}}</text>
+        <text class="acct-sub">{{item.platform}} · {{item.enabled ? '启用' : '停用'}}</text>
+      </view>
+      <view class="acct-btns">
+        <button size="mini" data-id="{{item.id}}" bindtap="onEdit">编辑</button>
+        <button size="mini" data-id="{{item.id}}" bindtap="onToggle">{{item.enabled ? '停用' : '启用'}}</button>
+        <button size="mini" type="warn" data-id="{{item.id}}" bindtap="onDelete">删除</button>
+      </view>
+    </view>
+  </view>
+
+  <view wx:if="{{accounts.length === 0}}" class="tip">还没有账号，点下面按钮添加</view>
+
+  <!-- 编辑表单 -->
+  <view wx:if="{{editing}}" class="card form">
+    <view class="row">
+      <text class="label">平台</text>
+      <picker mode="selector" range="{{platforms}}" range-key="label" bindchange="onPlatformChange">
+        <view class="picker">{{editing.platform}}</view>
+      </picker>
+    </view>
+    <view class="row">
+      <text class="label">备注</text>
+      <input class="input" placeholder="如 原神大号" data-field="label" value="{{editing.label}}" bindinput="onField" />
+    </view>
+    <view class="row">
+      <text class="label">凭据</text>
+      <input class="input" placeholder="{{editing.id && editing.hasCredential ? '留空则不修改原凭据' : '粘贴 Cookie / Token'}}" data-field="credential" value="{{editing.credential}}" bindinput="onField" />
+    </view>
+    <view class="form-actions">
+      <button size="mini" bindtap="onCancelEdit">取消</button>
+      <button size="mini" type="primary" bindtap="onSave">保存</button>
+    </view>
+  </view>
+
+  <button type="primary" bindtap="onNew" wx:if="{{!editing}}">+ 添加账号</button>
+  <button bindtap="onToggleBatch" wx:if="{{!editing}}">批量导入</button>
+
+  <!-- 批量导入 -->
+  <view wx:if="{{showBatch}}" class="card form">
+    <text class="tip-left">每行一个：平台|备注|凭据（平台填 mihoyo / kuro / yanyun）</text>
+    <textarea class="textarea" placeholder="mihoyo|原神大号|ltuid=...&#10;kuro|鸣潮|token值" value="{{batchText}}" bindinput="onBatchInput" />
+    <button type="primary" size="mini" bindtap="onBatchImport">导入</button>
+  </view>
+
+  <view class="tip">凭据加密保存在云端，仅你本人可见；不会在前端显示明文。</view>
+</view>

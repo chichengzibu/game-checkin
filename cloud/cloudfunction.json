@@ -1,0 +1,11 @@
+{
+  "name": "checkin",
+  "version": "2.0.0",
+  "description": "游戏签到云函数（多用户 + 加密存储 + 批量 + 定时）",
+  "main": "index.py",
+  "runtime": "Python3.9",
+  "timeout": 60,
+  "envVariables": {
+    "MASTER_KEY": "在此填入随机主密钥（python -c \"from store.crypto import gen_master_key;print(gen_master_key())\"）"
+  }
+}

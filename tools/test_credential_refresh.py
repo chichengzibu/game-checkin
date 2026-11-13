@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""自动续期 / 未实现平台短路 / 主密钥持久化 回归测试。
+
+完全离线：所有网络调用用假 Session / monkeypatch 替换，账号库用临时目录。
+不会联网、不会读写 config/vault.json、不会打印任何真实凭据。
+
+    python tools/test_credential_refresh.py     # 退出码 0 = 全部通过
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import unittest
+from unittest import mock
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+import service  # noqa: E402
+from store import credentials  # noqa: E402
+from store.base import Account  # noqa: E402
+from store.local_store import resolve_master_key  # noqa: E402
+
+
+class _Resp:
+    def __init__(self, payload, status=200):
+        self._payload = payload
+        self.status_code = status
+
+    def json(self):
+        return self._payload
+
+
+class _FakeSession:
+    """按 URL 返回预设结果，并记录调用，绝不发真实请求。"""
+
+    def __init__(self, router):
+        self.router = router
+        self.calls = []
+
+    def get(self, url, **kw):
+        self.calls.append((url, kw))
+        return _Resp(self.router(url, kw))
+
+
+class _MemStore:
+    def __init__(self):
+        self.updated = []
+
+    def update_account(self, user_id, account):
+        self.updated.append((user_id, account))
+        return account
+
+
+FAKE_COOKIE = (
+    "ltuid_v2=12345678; ltoken_v2=FAKE_LT; cookie_token_v2=OLD_CT; "
+    "account_id_v2=12345678; ltmid_v2=FAKE_MID; "
+    "stoken=v2_FAKE_STOKEN_FOR_TEST_ONLY_0000000000; stuid=12345678; mid=FAKE_MID"
+)
+
+
+class TestCookieHelpers(unittest.TestCase):
+    def test_parse_join_roundtrip(self):
+        d = credentials.parse_cookie("a=1; b=two=three; a=9")
+        self.assertEqual(d["a"], "9")       # 后值覆盖
+        self.assertEqual(d["b"], "two=three")
+        self.assertIn("a=9", credentials.join_cookie(d))
+
+    def test_enrich_extracts_renewal_from_cookie(self):
+        c = credentials.enrich_mihoyo({"cookie": FAKE_COOKIE})
+        self.assertEqual(c["stoken"], "v2_FAKE_STOKEN_FOR_TEST_ONLY_0000000000")
+        self.assertEqual(c["stuid"], "12345678")
+        self.assertEqual(c["mid"], "FAKE_MID")
+        self.assertTrue(c["renewable"])
+        self.assertTrue(c["device_id"])
+        # 幂等
+        self.assertEqual(credentials.enrich_mihoyo(c), c)
+
+    def test_enrich_without_stoken_marks_not_renewable(self):
+        c = credentials.enrich_mihoyo({"cookie": "ltuid_v2=12345678; ltoken_v2=x"})
+        self.assertFalse(c["renewable"])
+        self.assertFalse(credentials.public_status(
+            Account(platform="mihoyo", credential=c)
+        )["auto_renew"])
+
+    def test_apply_new_cookie_token_replaces_both_aliases(self):
+        out = credentials.apply_new_cookie_token(FAKE_COOKIE, "NEW_CT")
+        d = credentials.parse_cookie(out)
+        self.assertEqual(d["cookie_token_v2"], "NEW_CT")
+        self.assertNotIn("OLD_CT", out)
+        # 原串无 V1 名时也应补上
+        only_v2 = "cookie_token_v2=OLD; account_id_v2=1"
+        d2 = credentials.parse_cookie(
+            credentials.apply_new_cookie_token(only_v2, "NEW_CT")
+        )
+        self.assertEqual(d2["cookie_token_v2"], "NEW_CT")
+
+    def test_apply_on_cookie_without_any_token(self):
+        d = credentials.parse_cookie(
+            credentials.apply_new_cookie_token("ltuid_v2=1; ltoken_v2=x", "NEW_CT")
+        )
+        self.assertEqual(d["cookie_token"], "NEW_CT")
+        self.assertEqual(d["ltuid_v2"], "1")   # 其他字段不丢
+
+
+class TestAuthFailureSignals(unittest.TestCase):
+    def test_mihoyo_signals(self):
+        for m in ("未取到游戏角色：Cookie 已失效", "xxx Cookie 失效，需重新登录",
+                  "失败 retcode=-100"):
+            self.assertTrue(credentials.is_auth_failure("mihoyo", m), m)
+
+    def test_kuro_signals(self):
+        for m in ("token 无效/已过期，请重新登录", "社区 code=220 令牌错误"):
+            self.assertTrue(credentials.is_auth_failure("kuro", m), m)
+
+    def test_normal_failure_is_not_auth_failure(self):
+        self.assertFalse(credentials.is_auth_failure("mihoyo", "触发人机验证(1034)"))
+        self.assertFalse(credentials.is_auth_failure("kuro", "今日已签"))
+
+
+class TestExchange(unittest.TestCase):
+    def _cred(self):
+        return credentials.enrich_mihoyo({"cookie": FAKE_COOKIE})
+
+    def test_passport_success(self):
+        def router(url, kw):
+            if "passport-api" in url:
+                return {"retcode": 0, "data": {"cookie_token": "CT_FROM_PASSPORT"}}
+            raise AssertionError("主接口成功时不应回退")
+        sess = _FakeSession(router)
+        with mock.patch.object(credentials, "get_session", return_value=sess):
+            tok, note = credentials.exchange_cookie_token(self._cred())
+        self.assertEqual(tok, "CT_FROM_PASSPORT")
+        self.assertIn("passport", note)
+        self.assertEqual(len(sess.calls), 1)
+        # DS 与 params 都带上
+        _, kw = sess.calls[0]
+        self.assertEqual(kw["params"]["stoken"],
+                         "v2_FAKE_STOKEN_FOR_TEST_ONLY_0000000000")
+        self.assertIn("ds", kw["headers"])
+
+    def test_fallback_to_takumi(self):
+        def router(url, kw):
+            if "passport-api" in url:
+                return {"retcode": -1, "message": "denied"}
+            return {"retcode": 0, "data": {"cookie_token": "CT_FROM_TAKUMI"}}
+        sess = _FakeSession(router)
+        with mock.patch.object(credentials, "get_session", return_value=sess):
+            tok, note = credentials.exchange_cookie_token(self._cred())
+        self.assertEqual(tok, "CT_FROM_TAKUMI")
+        self.assertEqual(len(sess.calls), 2)
+        _, kw = sess.calls[1]
+        self.assertIn("stoken=", kw["headers"]["Cookie"])
+        self.assertIn("mid=", kw["headers"]["Cookie"])  # v2_ 需带 mid
+
+    def test_both_fail(self):
+        def router(url, kw):
+            return {"retcode": -100, "message": "expired"}
+        with mock.patch.object(credentials, "get_session",
+                               return_value=_FakeSession(router)):
+            tok, note = credentials.exchange_cookie_token(self._cred())
+        self.assertIsNone(tok)
+        self.assertIn("失败", note)
+
+    def test_no_stoken_short_circuits(self):
+        with mock.patch.object(credentials, "get_session") as gs:
+            tok, _ = credentials.exchange_cookie_token({"cookie": "ltuid_v2=1"})
+        self.assertIsNone(tok)
+        gs.assert_not_called()
+
+
+class TestRenew(unittest.TestCase):
+    def _mihoyo_account(self, cookie=FAKE_COOKIE):
+        return Account(platform="mihoyo", label="测试米游社",
+                       credential={"cookie": cookie})
+
+    def test_mihoyo_renew_writes_back_new_cookie(self):
+        acc, store = self._mihoyo_account(), _MemStore()
+        with mock.patch.object(credentials, "mihoyo_cookie_valid",
+                               return_value=False), \
+             mock.patch.object(credentials, "exchange_cookie_token",
+                               return_value=("FRESH_CT", "ok")):
+            ok, note = credentials.renew(acc, store, "local")
+        self.assertTrue(ok, note)
+        d = credentials.parse_cookie(acc.credential["cookie"])
+        self.assertEqual(d["cookie_token_v2"], "FRESH_CT")
+        self.assertEqual(acc.credential["stoken"],
+                         "v2_FAKE_STOKEN_FOR_TEST_ONLY_0000000000")
+        self.assertIn("last_renew", acc.credential)
+        self.assertEqual(len(store.updated), 1)   # 必须回写，否则旧 token 作废后彻底失效
+
+    def test_no_stoken_gives_actionable_hint(self):
+        acc = self._mihoyo_account("ltuid_v2=12345678; ltoken_v2=x; cookie_token_v2=OLD")
+        ok, note = credentials.renew(acc, _MemStore(), "local")
+        self.assertFalse(ok)
+        self.assertIn("登录获取", note)
+
+    def test_kuro_never_invents_refresh(self):
+        acc = Account(platform="kuro", label="测试库街区",
+                      credential={"token": "FAKE", "source": "h5"})
+        with mock.patch.object(credentials, "exchange_cookie_token") as ex:
+            ok, note = credentials.renew(acc, _MemStore(), "local")
+        self.assertFalse(ok)
+        self.assertIn("没有", note)
+        self.assertIn("登录获取", note)
+        ex.assert_not_called()
+        self.assertEqual(acc.credential["source"], "h5")  # 不破坏 source
+
+    def test_prepare_lazily_enriches_old_account(self):
+        acc, store = self._mihoyo_account(), _MemStore()
+        note = credentials.prepare(acc, store, "local")
+        self.assertIn("自动续期", note)
+        self.assertTrue(acc.credential["renewable"])
+        self.assertEqual(len(store.updated), 1)
+        # 第二次不再回写
+        credentials.prepare(acc, store, "local")
+        self.assertEqual(len(store.updated), 1)
+
+
+class TestServiceWiring(unittest.TestCase):
+    def test_unimplemented_platform_short_circuits(self):
+        acc = Account(platform="yanyun", label="测试燕云",
+                      credential={"token": "FAKE"})
+        with mock.patch.object(service, "get_adapter") as ga:
+            ok, msg = service._check_one(acc)
+        self.assertFalse(ok)
+        self.assertIn("未实现", msg)
+        ga.assert_not_called()   # 不发网络请求、不假装签到
+
+    def test_mihoyo_adapter_still_registered(self):
+        from engine import get_adapter, is_implemented, platform_status
+        self.assertTrue(is_implemented("mihoyo"))
+        self.assertTrue(is_implemented("kuro"))
+        self.assertEqual(platform_status("yanyun"), "unimplemented")
+        self.assertEqual(type(get_adapter("mihoyo", {"cookie": "x"})).__name__,
+                         "MihoyoAdapter")
+        self.assertEqual(type(get_adapter("kuro", {"token": "x"})).__name__,
+                         "KuroAdapter")
+
+    def test_failed_sign_triggers_renew_and_retry(self):
+        class _FailAdapter:
+            def __init__(self, account):
+                self.account = account
+
+            def sign_in(self):
+                from engine.base import CheckinResult
+                return CheckinResult(platform="mihoyo", success=False,
+                                     message="未取到游戏角色：Cookie 已失效")
+
+        class _OkAdapter(_FailAdapter):
+            def sign_in(self):
+                from engine.base import CheckinResult
+                return CheckinResult(platform="mihoyo", success=True,
+                                     message="原神 签到成功")
+
+        acc = Account(platform="mihoyo", label="测试",
+                      credential=credentials.enrich_mihoyo({"cookie": FAKE_COOKIE}))
+        calls = {"n": 0}
+
+        def factory(platform, payload):
+            calls["n"] += 1
+            return _FailAdapter(payload) if calls["n"] == 1 else _OkAdapter(payload)
+
+        with mock.patch.object(service, "get_adapter", side_effect=factory), \
+             mock.patch.object(service.credentials, "prepare", return_value=""), \
+             mock.patch.object(service.credentials, "renew",
+                               return_value=(True, "已自动续期")), \
+             mock.patch.object(service.time, "sleep"):
+            ok, msg = service._check_one(acc, _MemStore(), "local")
+        self.assertTrue(ok, msg)
+        self.assertIn("自动续期", msg)
+        self.assertEqual(calls["n"], 2)
+
+
+class TestMasterKeyPersistence(unittest.TestCase):
+    def test_generates_and_reuses_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            key_file = os.path.join(td, "config", "master.key")
+            vault = os.path.join(td, "config", "vault.json")
+            env = {
+                "CHECKIN_MASTER_KEY_FILE": key_file,
+                "CHECKIN_VAULT_PATH": vault,
+            }
+            with mock.patch.dict(os.environ, env, clear=False), \
+                 mock.patch.dict(os.environ, {"CHECKIN_MASTER_KEY": ""}):
+                os.environ.pop("CHECKIN_MASTER_KEY", None)
+                k1 = resolve_master_key()
+                k2 = resolve_master_key()
+            self.assertEqual(k1, k2)          # 重启沿用，不用重新登录
+            self.assertTrue(os.path.isfile(key_file))
+            self.assertGreaterEqual(len(k1), 32)
+
+    def test_env_key_wins(self):
+        with mock.patch.dict(os.environ, {"CHECKIN_MASTER_KEY": "EXPLICIT"}):
+            self.assertEqual(resolve_master_key(), "EXPLICIT")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

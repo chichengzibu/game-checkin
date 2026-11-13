@@ -1,0 +1,18 @@
+# 发布仓库自身的忽略规则（用户数据永不入库）
+config/vault.json
+config/master.key
+config/games.json
+logs/
+*.log
+*.key
+*.pem
+*.tmp
+.env
+.env.*
+dist/
+build/
+__pycache__/
+*.py[cod]
+.workbuddy/
+*prompt*
+*提示词*

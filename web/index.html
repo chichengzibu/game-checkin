@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>游戏签到中心</title>
+<script src="/qrcode.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --card: #ffffff;
+    --text: #1a1d21;
+    --text-2: #6b7280;
+    --line: #e8eaed;
+    --primary: #2f6bff;
+    --primary-hover: #1f56e0;
+    --ok: #16a34a;
+    --ok-bg: #ecfdf3;
+    --fail: #dc2626;
+    --fail-bg: #fef2f2;
+    --warn: #d97706;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 4px 16px rgba(16,24,40,.06);
+    --shadow-lg: 0 12px 40px rgba(16,24,40,.14);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                 "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 40px 20px 80px; }
+
+  /* ---------- 头部 ---------- */
+  header { margin-bottom: 28px; }
+  .title-row { display: flex; align-items: center; gap: 12px; }
+  .logo {
+    width: 40px; height: 40px; border-radius: 11px;
+    background: linear-gradient(135deg, #2f6bff, #6a9bff);
+    display: grid; place-items: center; color: #fff;
+    font-weight: 700; font-size: 19px; box-shadow: 0 4px 12px rgba(47,107,255,.32);
+  }
+  h1 { font-size: 22px; font-weight: 650; letter-spacing: -.2px; }
+  .subtitle { color: var(--text-2); font-size: 13.5px; margin-top: 3px; }
+
+  /* ---------- 统计条 ---------- */
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 22px 0; }
+  .stat {
+    background: var(--card); border-radius: var(--radius); padding: 16px 18px;
+    box-shadow: var(--shadow); border: 1px solid var(--line);
+  }
+  .stat .num { font-size: 26px; font-weight: 700; letter-spacing: -.5px; }
+  .stat .lbl { color: var(--text-2); font-size: 12.5px; margin-top: 2px; }
+
+  /* ---------- 操作区 ---------- */
+  .actions { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    border: 1px solid var(--line); background: var(--card); color: var(--text);
+    padding: 11px 18px; border-radius: 11px; font-size: 14px; font-weight: 550;
+    cursor: pointer; transition: .16s ease; font-family: inherit;
+    box-shadow: var(--shadow);
+  }
+  .btn:hover { border-color: #d4d8dd; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; transform: none; }
+  .btn-primary {
+    background: var(--primary); color: #fff; border-color: transparent;
+    box-shadow: 0 4px 14px rgba(47,107,255,.3);
+  }
+  .btn-primary:hover { background: var(--primary-hover); border-color: transparent; }
+
+  /* ---------- 进度条 ---------- */
+  .progress-box {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 20px; margin-bottom: 20px; box-shadow: var(--shadow);
+    display: none; animation: fadeIn .25s ease;
+  }
+  .progress-box.show { display: block; }
+  .progress-head { display: flex; justify-content: space-between; font-size: 13.5px; margin-bottom: 10px; }
+  .progress-head .pct { color: var(--primary); font-weight: 650; }
+  .track { height: 7px; background: #eef0f3; border-radius: 99px; overflow: hidden; }
+  .fill {
+    height: 100%; width: 0%; border-radius: 99px;
+    background: linear-gradient(90deg, #2f6bff, #6a9bff);
+    transition: width .3s ease;
+  }
+
+  /* ---------- 账号卡片 ---------- */
+  .list-title { font-size: 13px; font-weight: 650; color: var(--text-2);
+    text-transform: uppercase; letter-spacing: .6px; margin: 26px 0 12px; }
+  .empty {
+    text-align: center; padding: 56px 20px; background: var(--card);
+    border: 1px dashed #d8dce2; border-radius: var(--radius); color: var(--text-2);
+    font-size: 14px; line-height: 1.9;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; margin-bottom: 11px; box-shadow: var(--shadow);
+    transition: .18s ease; animation: slideIn .28s ease;
+  }
+  .card:hover { box-shadow: var(--shadow-lg); }
+  .card.off { opacity: .55; }
+  .card.res-ok { border-left: 4px solid var(--ok); }
+  .card.res-fail { border-left: 4px solid var(--fail); }
+  .card-top { display: flex; align-items: center; gap: 12px; }
+  .badge {
+    font-size: 11.5px; padding: 3px 9px; border-radius: 7px;
+    background: #eef2ff; color: #3b5bdb; font-weight: 600; white-space: nowrap;
+  }
+  .badge.mihoyo { background: #eef2ff; color: #3b5bdb; }
+  .badge.kuro { background: #f3e8ff; color: #8b3fd9; }
+  .badge.yanyun { background: #fef3e2; color: #b45309; }
+  .badge.stub { background: #f1f3f5; color: #6b7280; }
+  .badge.todo { background: #fee2e2; color: #b91c1c; font-weight: 600; }
+  .card-note { font-size: 12px; color: var(--text-2); margin-top: 6px; line-height: 1.5; }
+  .card-note.warn { color: #b45309; }
+  .name { font-size: 15.5px; font-weight: 600; flex: 1; }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #cbd2da; flex-shrink: 0;
+  }
+  .status-dot.on { background: var(--ok); box-shadow: 0 0 0 3px rgba(22,163,74,.15); }
+  .card-meta { font-size: 12.5px; color: var(--text-2); margin-top: 8px; line-height: 1.6; }
+  .card-meta .r-ok { color: var(--ok); font-weight: 550; }
+  .card-meta .r-fail { color: var(--fail); font-weight: 550; }
+  .card-btns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+  .card-detect { margin-top: 10px; display: none; }
+  .card-detect.show { display: block; animation: fadeIn .2s ease; }
+  .det-row { font-size: 12.5px; color: var(--text-2); line-height: 1.7;
+             background: #f8fafc; border: 1px solid var(--line); border-radius: 8px;
+             padding: 8px 11px; }
+  .det-row b { color: var(--text); }
+  .det-game { color: var(--ok); font-weight: 600; }
+  .det-note { color: var(--fail); }
+  .mini {
+    font-size: 12.5px; padding: 6px 13px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: #fbfcfd; color: var(--text);
+    font-family: inherit; font-weight: 500; transition: .14s ease;
+  }
+  .mini:hover { background: #f1f3f6; border-color: #d4d8dd; }
+  .mini.sign { background: var(--primary); color: #fff; border-color: transparent; }
+  .mini.sign:hover { background: var(--primary-hover); }
+  .mini.danger:hover { background: var(--fail-bg); border-color: #fca5a5; color: var(--fail); }
+
+  /* ---------- 弹窗 ---------- */
+  .mask {
+    position: fixed; inset: 0; background: rgba(16,24,40,.42);
+    backdrop-filter: blur(3px); display: none; align-items: center;
+    justify-content: center; padding: 20px; z-index: 100;
+  }
+  .mask.show { display: flex; animation: fadeIn .18s ease; }
+  .modal {
+    background: var(--card); border-radius: 18px; width: 100%; max-width: 460px;
+    padding: 26px; box-shadow: 0 24px 64px rgba(16,24,40,.3);
+    animation: popIn .22s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .modal h2 { font-size: 18px; font-weight: 650; margin-bottom: 4px; }
+  .modal .hint { color: var(--text-2); font-size: 12.5px; margin-bottom: 20px; line-height: 1.6; }
+  .field { margin-bottom: 15px; }
+  .field label { display: block; font-size: 12.5px; font-weight: 600;
+    color: var(--text-2); margin-bottom: 6px; }
+  .field input, .field select, .field textarea {
+    width: 100%; padding: 11px 13px; border: 1px solid var(--line);
+    border-radius: 10px; font-size: 14px; font-family: inherit; background: #fbfcfd;
+    transition: .15s ease; color: var(--text); outline: none;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    border-color: var(--primary); background: #fff;
+    box-shadow: 0 0 0 3px rgba(47,107,255,.12);
+  }
+  .field textarea { resize: vertical; min-height: 68px; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .link-row { display: flex; gap: 8px; align-items: stretch; }
+  .link-row input { flex: 1; min-width: 0; font-size: 12.5px; }
+  .link-row .btn { flex: none; white-space: nowrap; padding: 10px 15px; font-size: 13px; }
+  .link-subhint { font-size: 12px; color: var(--text-2); margin-top: 8px; line-height: 1.6; }
+  .link-subhint.ok { color: #15803d; }
+  .link-subhint.warn { color: #b45309; }
+
+  /* ---------- 获取帮助 ---------- */
+  .help-box {
+    margin-top: -4px; margin-bottom: 16px; border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; background: #fbfcfd;
+  }
+  .help-toggle {
+    width: 100%; display: flex; justify-content: space-between; align-items: center;
+    background: none; border: none; padding: 10px 13px; cursor: pointer;
+    font-size: 12.5px; font-weight: 600; color: var(--primary); font-family: inherit;
+  }
+  .help-toggle:hover { background: #f4f7ff; }
+  .help-arrow { transition: transform .2s ease; font-size: 11px; }
+  .help-box.open .help-arrow { transform: rotate(180deg); }
+  .help-body { display: none; padding: 2px 14px 14px; animation: fadeIn .2s ease; }
+  .help-box.open .help-body { display: block; }
+  .help-body ol { padding-left: 17px; }
+  .help-body li { font-size: 12.5px; color: #4b5563; line-height: 1.95; }
+  .help-body code {
+    background: #eef2f7; padding: 1px 5px; border-radius: 4px;
+    font-size: 11.5px; color: #b91c1c; font-family: ui-monospace, monospace;
+  }
+  .help-warn {
+    margin-top: 9px; padding: 9px 11px; border-radius: 7px;
+    background: #fffbeb; border: 1px solid #fde68a;
+    font-size: 11.5px; color: #92400e; line-height: 1.75;
+  }
+  .help-warn:empty { display: none; }
+
+  /* ---------- 登录获取 ---------- */
+  .login-btn { width: 100%; margin-bottom: 14px; padding: 13px; font-size: 14.5px; }
+  .qr-wrap { display: none; flex-direction: column; align-items: center; margin-bottom: 16px; }
+  .qr-wrap.show { display: flex; animation: popIn .25s ease; }
+  .qr-box {
+    padding: 14px; background: #fff; border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: var(--shadow);
+  }
+  #qr-canvas canvas, #qr-canvas img { display: block; width: 176px; height: 176px; }
+  .qr-status { margin-top: 12px; font-size: 13.5px; font-weight: 600; color: var(--primary); }
+  .qr-status.ok { color: var(--ok); }
+  .qr-status.err { color: var(--fail); }
+  .qr-tip { margin-top: 4px; font-size: 12px; color: var(--text-2); }
+  .browser-icon { font-size: 46px; margin-bottom: 4px; }
+  .manual-toggle {
+    font-size: 12.5px; color: var(--text-2); cursor: pointer; padding: 8px 0;
+    border-top: 1px dashed var(--line); margin-top: 4px; user-select: none;
+  }
+  .manual-toggle:hover { color: var(--primary); }
+  .manual-area { display: none; }
+  .manual-area.show { display: block; animation: fadeIn .2s ease; }
+  .modal-btns { display: flex; gap: 10px; justify-content: flex-end; margin-top: 22px; }
+
+  /* ---------- Toast ---------- */
+  .toast-wrap { position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+    z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .toast {
+    background: #1f2430; color: #fff; padding: 11px 20px; border-radius: 10px;
+    font-size: 13.5px; box-shadow: 0 8px 24px rgba(0,0,0,.24);
+    animation: dropIn .24s ease; max-width: 90vw;
+  }
+  .toast.ok { background: #15803d; }
+  .toast.err { background: #b91c1c; }
+
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: scale(1); } }
+  @keyframes dropIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+
+  @media (max-width: 560px) {
+    .stats { grid-template-columns: 1fr; }
+    .wrap { padding: 28px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+<div class="toast-wrap" id="toasts"></div>
+
+<div class="wrap">
+  <header>
+    <div class="title-row">
+      <div class="logo">签</div>
+      <div>
+        <h1>游戏签到中心</h1>
+        <div class="subtitle">米游社 · 库街区（鸣潮/战双） · 一键批量签到 <span style="color:#b91c1c">（燕云签到未实现）</span></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><div class="num" id="stat-total">0</div><div class="lbl">账号总数</div></div>
+    <div class="stat"><div class="num" id="stat-enabled" style="color:var(--ok)">0</div><div class="lbl">启用中</div></div>
+    <div class="stat"><div class="num" id="stat-signed" style="color:var(--primary)">0</div><div class="lbl">今日已签</div></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-primary" id="btn-checkin-all">⚡ 一键签到（全部）</button>
+    <button class="btn" id="btn-add">＋ 添加账号</button>
+    <button class="btn" id="btn-refresh">↻ 刷新</button>
+  </div>
+
+  <div class="progress-box" id="progress">
+    <div class="progress-head">
+      <span id="prog-label">正在签到…</span>
+      <span class="pct" id="prog-pct">0%</span>
+    </div>
+    <div class="track"><div class="fill" id="prog-fill"></div></div>
+  </div>
+
+  <div class="list-title">我的账号</div>
+  <div id="account-list"></div>
+</div>
+
+<!-- 添加/编辑弹窗 -->
+<div class="mask" id="modal">
+  <div class="modal">
+    <h2 id="modal-title">添加账号</h2>
+    <div class="hint" id="modal-hint">选择平台后，点「登录获取」——你只需扫码，凭据程序自动保存。</div>
+
+    <div class="field">
+      <label>平台</label>
+      <select id="f-platform">
+        <option value="mihoyo">米游社（原神 / 星铁 / 绝区零 / 崩3）✅</option>
+        <option value="kuro">库街区（鸣潮 / 战双帕弥什）✅</option>
+        <option value="yanyun">燕云十六声（签到未实现 · 仅唤起小程序）</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label>备注名（可选）</label>
+      <input id="f-label" placeholder="如：原神大号，留空自动命名" autocomplete="off" />
+    </div>
+
+    <!-- 方式一：登录获取（主推） -->
+    <div id="login-area">
+      <button type="button" class="btn btn-primary login-btn" id="btn-login-start">
+        🔐 登录获取（推荐）
+      </button>
+
+      <!-- 米游社：二维码 -->
+      <div class="qr-wrap" id="qr-wrap">
+        <div class="qr-box"><div id="qr-canvas"></div></div>
+        <div class="qr-status" id="qr-status">用米游社 App 扫码登录</div>
+        <div class="qr-tip">扫码后请在手机上点「确认登录」</div>
+      </div>
+
+      <!-- 其他平台：浏览器登录状态 -->
+      <div class="qr-wrap" id="browser-wrap">
+        <div class="browser-icon">🌐</div>
+        <div class="qr-status" id="browser-status">已打开官方登录页</div>
+        <div class="qr-tip" id="browser-tip">请在弹出的浏览器窗口里完成登录</div>
+      </div>
+    </div>
+
+    <!-- 燕云：粘贴小程序链接（据此直接跳转对应小程序） -->
+    <div class="field" id="yanyun-link-field" style="display:none">
+      <label>小程序链接（选填，贴了就能按此链接跳转）</label>
+      <div class="link-row">
+        <input id="f-yanyun-link"
+               placeholder="粘贴 #小程序://燕云十六声官方/... 或 weixin://dl/business/?appid=..."
+               autocomplete="off" />
+        <button type="button" class="btn" id="btn-yanyun-link">用此链接</button>
+      </div>
+      <div class="link-subhint" id="yanyun-link-hint">
+        把你在微信里「复制链接」得到的小程序链接贴到这里，程序会据此唤起对应小程序。
+      </div>
+    </div>
+
+    <!-- 方式二：手动填（备用） -->
+    <div class="manual-toggle" id="manual-toggle">▼ 或手动粘贴凭据</div>
+    <div class="manual-area" id="manual-area">
+      <div class="field">
+        <label id="f-cred-label">Cookie</label>
+        <textarea id="f-cred" placeholder="粘贴 Cookie / Token"></textarea>
+      </div>
+      <div class="help-box" id="help-box">
+        <button type="button" class="help-toggle" id="help-toggle">
+          <span id="help-title">如何获取？</span>
+          <span class="help-arrow" id="help-arrow">▾</span>
+        </button>
+        <div class="help-body" id="help-body">
+          <ol id="help-steps"></ol>
+          <div class="help-warn" id="help-warn"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-btns">
+      <button class="btn" id="btn-cancel">取消</button>
+      <button class="btn btn-primary" id="btn-save" style="display:none">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PLATFORM_NAME = { mihoyo: "米游社", kuro: "库街区", yanyun: "燕云十六声", stub: "其他" };
+const CRED_LABEL = { mihoyo: "Cookie", kuro: "Token", yanyun: "access_token" };
+
+// 各平台凭据获取指引（点「如何获取？」展开）
+const HELP = {
+  mihoyo: {
+    steps: [
+      '电脑浏览器打开 <code>miyoushe.com</code>，扫码登录（不是游戏内登录）',
+      '按 <code>F12</code> 打开开发者工具，切到「网络 / Network」标签',
+      '刷新页面，在请求列表点任意一条 <code>api-takumi</code> 开头的请求',
+      '右侧「请求标头 / Headers」中找到 <code>Cookie:</code> 这一行',
+      '整段复制冒号后面的全部内容，粘贴到上方输入框',
+    ],
+    warn: '必须包含 ltuid / ltoken / cookie_token（新版为 ltuid_v2 / ltoken_v2 / cookie_token_v2）。只复制一部分会提示「登录已过期」。',
+  },
+  kuro: {
+    steps: [
+      '点上方「登录获取」按钮，会自动打开库街区官方登录页',
+      '在弹出的浏览器窗口里用<b>手机号 + 短信验证码</b>登录（验证码你自己收）',
+      '完成验证码后登录成功，程序会自动读取凭据并添加账号',
+      '如果浏览器没有弹出，请允许本程序启动 Edge / Chrome',
+      '<b>已有游戏自动识别</b>：鸣潮、战双帕弥什会自动签到；库街区上新游戏也会自动探测（无需改设置）',
+    ],
+    warn: '库街区发码前有极验人机验证，程序不绕过它——由你在官方页面里正常完成，最安全。没有绑定的游戏不会出现「签到失败」，只在你真正拥有的游戏上签到。',
+  },
+  yanyun: {
+    steps: [
+      '<b style="color:#b91c1c">⚠️ 燕云十六声签到【未实现】：本平台不参与自动签到，即使填写 access_token 也不会执行签到。下方唤起小程序仅是抓包辅助，不代表签到可用。请勿依赖此功能。</b>',
+      '燕云每日签到的 <code>access_token</code> 只能从 <b>微信小程序</b> 拿到，网页 / 云游戏页无法自动获取',
+      '点上方「登录获取」会<b>自动唤起燕云小程序</b>：程序动态检测本机微信客户端，扫描微信缓存自动定位燕云的真实 appid 并直接唤起（<b>无需你建桌面快捷方式、无需填 appid</b>；桌面若已有快捷方式也能用）',
+      '若你手上有小程序的「复制链接」（<code>#小程序://…</code> 或 <code>weixin://dl/business/?appid=…</code>），贴到上方「小程序链接」框点「用此链接」：能解出 appid 就一键直达；<code>#小程序://</code> 是微信私有短链，程序会自动复制它并打开微信，你在微信里粘贴发送、点一下即可打开（打开过一次后本程序就能自动发现 appid，以后一键直达）',
+      '小程序打开后进入「活动 / 朝夕共赏（签到）」页，用你电脑的抓包工具拦截小程序请求（Fiddler / Charles / Stream 均可）',
+      '在签到页触发一次请求，找到含 <code>s3.game.163.com/7540694694f2dddc/user/sign?access_token=xxxx</code> 的那条',
+      '复制 <code>access_token=</code> 后面那一长串（到 & 或结尾为止），粘贴到下方输入框',
+    ],
+    warn: '【未实现】燕云签到协议代码未经真实 access_token 验证，也没有可用的 token 获取/刷新链路，因此签到服务会直接跳过该平台并明确告知，不会假装签到成功。以下唤起说明仅供抓包参考。为什么不像米游社那样网页扫码？燕云签到接口只认微信小程序的 access_token，云游戏 / 官网页登录拿不到它。本程序能帮你「唤起」小程序（粘贴的链接 / 自动发现 appid / 桌面快捷方式 / 只开微信 多级兜底），但 token 仍需从小程序抓包粘贴——微信小程序的网络走微信自身 webview，本程序拦截不到。注意 #小程序:// 是微信私有短链，Windows 无法像普通网址一样直接唤起，需在微信内点开一次；打开过之后微信会缓存它，本程序即可自动发现 appid 一键直达。',
+  },
+};
+
+const $ = (id) => document.getElementById(id);
+let accounts = [];
+let editingId = null;
+
+// ---------------- API 封装 ----------------
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...opts,
+  });
+  let data = {};
+  try { data = await res.json(); } catch (e) {}
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `请求失败 (${res.status})`);
+  }
+  return data;
+}
+
+// ---------------- Toast ----------------
+function toast(msg, type = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + type;
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => {
+    el.style.transition = "opacity .3s, transform .3s";
+    el.style.opacity = "0";
+    el.style.transform = "translateY(-8px)";
+    setTimeout(() => el.remove(), 320);
+  }, 2400);
+}
+
+// ---------------- 渲染 ----------------
+function renderStats() {
+  const total = accounts.length;
+  const enabled = accounts.filter(a => a.enabled).length;
+  const signed = accounts.filter(a => a.last_run && /成功|已签/.test(a.last_result || "")).length;
+  $("stat-total").textContent = total;
+  $("stat-enabled").textContent = enabled;
+  $("stat-signed").textContent = signed;
+}
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function renderList(resultMap = {}) {
+  const box = $("account-list");
+  if (!accounts.length) {
+    box.innerHTML = `<div class="empty">还没有账号<br/>点击上方「＋ 添加账号」开始</div>`;
+    return;
+  }
+  box.innerHTML = accounts.map(a => {
+    const r = resultMap[a.id];
+    let cls = "card", meta = "";
+    if (r) cls += r.success ? " res-ok" : " res-fail";
+    if (!a.enabled) cls += " off";
+
+    if (r) {
+      meta = `<div class="card-meta">
+        <span class="${r.success ? "r-ok" : "r-fail"}">${r.success ? "✅ 签到成功" : "❌ 签到失败"}</span>
+        ｜${esc(r.message)}</div>`;
+    } else if (a.last_run) {
+      const ok = /成功|已签/.test(a.last_result || "");
+      meta = `<div class="card-meta">
+        <span class="${ok ? "r-ok" : "r-fail"}">${ok ? "✅" : "❌"}</span>
+        ${esc(a.last_run)}｜${esc(a.last_result)}</div>`;
+    } else if (!a.has_credential) {
+      meta = `<div class="card-meta">⚠️ 未设置凭据</div>`;
+    }
+
+    // 未实现平台 + 自动续期状态：从后端状态字段渲染，前端不自行猜测
+    const todoBadge = a.implemented === false
+      ? `<span class="badge todo">签到未实现 · 不参与</span>` : "";
+    const renewLine = (a.renew && a.renew.note)
+      ? `<div class="card-note ${a.renew.auto_renew ? "" : "warn"}">${a.renew.auto_renew ? "🔄 " : "⚠️ "}${esc(a.renew.note)}</div>`
+      : "";
+
+    return `<div class="${cls}" data-id="${a.id}">
+      <div class="card-top">
+        <span class="badge ${a.platform}">${PLATFORM_NAME[a.platform] || a.platform}</span>
+        ${todoBadge}
+        <span class="name">${esc(a.label)}</span>
+        <span class="status-dot ${a.enabled ? "on" : ""}" title="${a.enabled ? "启用" : "停用"}"></span>
+      </div>
+      ${meta}
+      ${renewLine}
+      <div class="card-detect" id="det-${a.id}"></div>
+      <div class="card-btns">
+        <button class="mini sign" data-act="sign" data-id="${a.id}">签到</button>
+        <button class="mini" data-act="detect" data-id="${a.id}">检测可签游戏</button>
+        <button class="mini" data-act="edit" data-id="${a.id}">编辑</button>
+        <button class="mini" data-act="toggle" data-id="${a.id}">${a.enabled ? "停用" : "启用"}</button>
+        <button class="mini danger" data-act="del" data-id="${a.id}">删除</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+// ---------------- 数据加载 ----------------
+async function load() {
+  try {
+    const data = await api("/api/accounts");
+    accounts = data.accounts || [];
+    renderStats();
+    renderList();
+  } catch (e) {
+    toast(e.message, "err");
+  }
+}
+
+// ---------------- 签到（带实时进度） ----------------
+async function pollTask(taskId) {
+  const box = $("progress");
+  box.classList.add("show");
+  $("prog-label").textContent = "正在签到…";
+  $("prog-fill").style.width = "0%";
+  $("prog-pct").textContent = "0%";
+
+  return new Promise((resolve) => {
+    const timer = setInterval(async () => {
+      try {
+        const s = await api(`/api/checkin/status?task_id=${taskId}`);
+        const total = s.total || 1;
+        const pct = Math.round((s.done / total) * 100);
+        $("prog-fill").style.width = pct + "%";
+        $("prog-pct").textContent = pct + "%";
+        $("prog-label").textContent = `正在签到… ${s.done}/${s.total}`;
+
+        if (s.finished) {
+          clearInterval(timer);
+          $("prog-label").textContent = "签到完成";
+          const ok = (s.results || []).filter(r => r.success).length;
+          $("prog-pct").textContent = `${ok}/${s.total} 成功`;
+          const map = {};
+          (s.results || []).forEach(r => { map[r.id] = r; });
+          await load();
+          renderList(map);
+          setTimeout(() => box.classList.remove("show"), 1600);
+          resolve();
+        }
+      } catch (e) {
+        clearInterval(timer);
+        box.classList.remove("show");
+        toast(e.message, "err");
+        resolve();
+      }
+    }, 400);
+  });
+}
+
+async function doCheckin(accountId) {
+  try {
+    const data = await api("/api/checkin", {
+      method: "POST",
+      body: JSON.stringify(accountId ? { account_id: accountId } : {}),
+    });
+    await pollTask(data.task_id);
+    toast(accountId ? "签到完成" : "全部签到完成", "ok");
+  } catch (e) {
+    toast(e.message, "err");
+  }
+}
+
+// ---------------- 弹窗 ----------------
+let loginPollTimer = null;
+
+function stopLoginPoll() {
+  if (loginPollTimer) { clearInterval(loginPollTimer); loginPollTimer = null; }
+}
+
+function resetLoginUI() {
+  stopLoginPoll();
+  $("qr-wrap").classList.remove("show");
+  $("browser-wrap").classList.remove("show");
+  $("qr-status").className = "qr-status";
+  $("qr-status").textContent = "用米游社 App 扫码登录";
+  $("browser-status").className = "qr-status";
+  $("qr-status").textContent = "用米游社 App 扫码登录";
+  $("qr-canvas").innerHTML = "";
+  $("btn-login-start").disabled = false;
+  $("btn-login-start").textContent = "🔐 登录获取（推荐）";
+}
+
+/** 渲染二维码（用本地 qrcode.min.js，无外网依赖） */
+function renderQR(text) {
+  try {
+    const qr = qrcode(0, "M");
+    qr.addData(text);
+    qr.make();
+    $("qr-canvas").innerHTML = qr.createSvgTag({ cellSize: 4, margin: 0 });
+    const svg = $("qr-canvas").querySelector("svg");
+    if (svg) { svg.style.width = "176px"; svg.style.height = "176px"; }
+  } catch (e) {
+    $("qr-status").textContent = "二维码渲染失败：" + e.message;
+    $("qr-status").className = "qr-status err";
+  }
+}
+
+/** 统一登录入口：米游社走扫码，库街区开浏览器登录页，燕云走微信小程序抓包 */
+async function startLogin() {
+  const platform = $("f-platform").value;
+  if (platform === "mihoyo") return startMihoyoQR();
+  if (platform === "yanyun") return startYanyunManual();
+  return startBrowserLogin(platform);
+}
+
+/** 燕云：解析用户粘贴的小程序链接（#小程序:// 或 weixin://dl/business/?appid=） */
+async function setYanyunLink() {
+  const link = ($("f-yanyun-link").value || "").trim();
+  const box = $("yanyun-link-hint");
+  if (!link) {
+    box.className = "link-subhint warn";
+    box.textContent = "请先粘贴小程序链接：在微信里打开小程序 → 右上角「…」→ 复制链接。";
+    return;
+  }
+  box.className = "link-subhint";
+  box.textContent = "正在解析链接…";
+  try {
+    const d = await api("/api/login/yanyun/set-link",
+                        { method: "POST", body: JSON.stringify({ link }) });
+    if (d.ok && d.kind === "appid") {
+      box.className = "link-subhint ok";
+      box.textContent = "✅ " + d.hint;
+      $("modal-hint").textContent = "✅ " + d.hint;
+      toast("已解析小程序 appid，点「登录获取」即可直达", "ok");
+    } else if (d.ok && d.kind === "raw") {
+      box.className = "link-subhint warn";
+      box.textContent = "ℹ️ " + d.hint;
+      $("modal-hint").textContent = d.hint;
+      toast("已记录链接，点「登录获取」按提示在微信里打开", "ok");
+    } else {
+      box.className = "link-subhint warn";
+      box.textContent = "⚠️ " + (d.hint || "链接无法识别");
+    }
+  } catch (e) {
+    box.className = "link-subhint warn";
+    box.textContent = "提交失败：" + e.message + "（请确认 Web 服务已重启并正在运行）";
+  }
+}
+
+/** 燕云：探测本机是否已能自动定位小程序，更新提示文案 */
+async function probeYanyun() {
+  try {
+    const d = await api("/api/login/yanyun/discover", { method: "POST", body: "{}" });
+    if (d.ok && d.auto_appid) {
+      $("modal-hint").textContent = "✅ 已自动从本机微信缓存定位到燕云小程序，点「登录获取」可直接唤起。唤起后在小程序签到并抓包，把 access_token 粘到下方。";
+    } else if (d.ok && d.has_shortcut) {
+      $("modal-hint").textContent = "已检测到桌面燕云快捷方式，点「登录获取」会直接打开它。唤起后在小程序签到并抓包，把 access_token 粘到下方。";
+    } else {
+      $("modal-hint").textContent = "⚠️ " + (d.hint || "未自动定位到燕云小程序：请先在微信里打开一次燕云十六声小程序（之后即可自动唤起），或把它添加到桌面。也可以直接打开微信手动进入。");
+    }
+  } catch (e) {
+    $("modal-hint").textContent = "燕云请用微信小程序抓包拿到 access_token，粘贴到下方输入框。";
+  }
+}
+
+/** 燕云：唤起微信小程序 + 引导抓包粘贴 */
+async function startYanyunManual() {
+  resetLoginUI();
+  openManual();                              // 展开手动粘贴区
+  const h = HELP.yanyun;
+  $("help-title").textContent = `如何获取${PLATFORM_NAME.yanyun} access_token？`;
+  $("help-steps").innerHTML = h.steps.map((s) => `<li>${s}</li>`).join("");
+  $("help-warn").innerHTML = h.warn ? "⚠️ " + h.warn : "";
+  $("help-box").classList.add("open");
+  $("modal-hint").textContent = "正在唤起燕云小程序：在小程序里签到并抓包，把 access_token 粘到下方。";
+  // 尝试唤起燕云小程序（优先自动发现 appid，无需用户建快捷方式）
+  try {
+    const r = await api("/api/login/yanyun/open", { method: "POST", body: "{}" });
+    if (r.ok && (r.opened === "miniprogram")) {
+      toast("已唤起燕云小程序，请签到并抓包 access_token", "ok");
+    } else if (r.ok && r.opened === "link_handoff") {
+      $("modal-hint").textContent = r.hint || "已复制小程序链接并打开微信，请在微信里粘贴发送后点开。";
+      toast(r.copied ? "链接已复制，去微信里粘贴发送并点开" : "已打开微信，请在微信里打开小程序", "ok");
+    } else if (r.ok && r.opened === "shortcut") {
+      toast("已打开燕云桌面快捷方式，请签到并抓包 access_token", "ok");
+    } else if (r.ok && r.opened === "wechat") {
+      $("modal-hint").textContent = r.hint || "已打开微信，请手动进入燕云小程序，签到后抓包 access_token 粘到下方。";
+      toast("已打开微信，请手动进入燕云小程序", "ok");
+    } else {
+      // 精确诊断：把后端返回的 error/hint 透出，而不是笼统的「唤起失败」
+      const why = [r.error, r.hint].filter(Boolean).join("；");
+      $("modal-hint").innerHTML = "⚠️ 自动唤起未成功：" + (why || "请手动在微信里打开燕云小程序");
+      toast(why || "无法自动唤起，请手动打开燕云小程序", "err");
+    }
+  } catch (e) {
+    toast("唤起请求失败：" + e.message + "（请确认 Web 服务已重启并正在运行）", "err");
+  }
+}
+
+/** 米游社：扫码 */
+async function startMihoyoQR() {
+  const btn = $("btn-login-start");
+  btn.disabled = true;
+  btn.textContent = "正在生成二维码…";
+
+  try {
+    const d = await api("/api/login/start", {
+      method: "POST", body: JSON.stringify({ platform: "mihoyo" }),
+    });
+    renderQR(d.qr_url);
+    $("qr-wrap").classList.add("show");
+    $("qr-status").textContent = "用米游社 App 扫码登录";
+    $("qr-status").className = "qr-status";
+    btn.textContent = "⏳ 等待扫码…";
+
+    const sessionId = d.session_id;
+    const ticket = d.ticket;
+    let tick = 0;
+
+    stopLoginPoll();
+    loginPollTimer = setInterval(async () => {
+      tick++;
+      if (tick > 120) {
+        stopLoginPoll();
+        $("qr-status").textContent = "二维码已超时，请重新生成";
+        $("qr-status").className = "qr-status err";
+        btn.disabled = false;
+        btn.textContent = "🔄 重新生成二维码";
+        return;
+      }
+      try {
+        const r = await api("/api/login/poll", {
+          method: "POST",
+          body: JSON.stringify({ session_id: sessionId, ticket, label: $("f-label").value.trim() }),
+        });
+        if (r.status === "Scanned") {
+          $("qr-status").textContent = "已扫码，请在手机上确认登录";
+          $("qr-status").className = "qr-status";
+        } else if (r.status === "Confirmed") {
+          onLoginSuccess(r);
+        } else if (["Expired", "Cancelled", "Error"].includes(r.status)) {
+          stopLoginPoll();
+          $("qr-status").textContent = r.error || "二维码失效，请重新生成";
+          $("qr-status").className = "qr-status err";
+          btn.disabled = false;
+          btn.textContent = "🔄 重新生成二维码";
+        }
+      } catch (e) {
+        stopLoginPoll();
+        $("qr-status").textContent = e.message;
+        $("qr-status").className = "qr-status err";
+        btn.disabled = false;
+        btn.textContent = "🔄 重试";
+      }
+    }, 1500);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = "🔐 登录获取（推荐）";
+    toast(e.message, "err");
+  }
+}
+
+/** 其他平台：打开官方登录页，用户在浏览器里登录，程序自动抓 cookie */
+async function startBrowserLogin(platform) {
+  const btn = $("btn-login-start");
+  const origText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "正在打开登录页…";
+
+  try {
+    const d = await api("/api/login/browser/start", {
+      method: "POST", body: JSON.stringify({ platform }),
+    });
+    $("browser-wrap").classList.add("show");
+    $("browser-status").textContent = `已打开 ${d.label} 官方登录页`;
+    $("browser-status").className = "qr-status";
+    $("browser-tip").textContent = d.hint + "。完成后此窗口会自动关闭登录页。";
+    btn.textContent = "⏳ 等待你在浏览器里登录…";
+
+    const sessionId = d.session_id;
+    let tick = 0;
+
+    stopLoginPoll();
+    loginPollTimer = setInterval(async () => {
+      tick++;
+      if (tick > 240) { // 6 分钟
+        stopLoginPoll();
+        await api("/api/login/browser/cancel", {
+          method: "POST", body: JSON.stringify({ session_id: sessionId }),
+        }).catch(() => {});
+        $("browser-status").textContent = "登录超时，请重试";
+        $("browser-status").className = "qr-status err";
+        btn.disabled = false;
+        btn.textContent = origText;
+        return;
+      }
+      try {
+        const r = await api("/api/login/browser/poll", {
+          method: "POST",
+          body: JSON.stringify({ session_id: sessionId, label: $("f-label").value.trim() }),
+        });
+        if (r.status === "Confirmed") {
+          onLoginSuccess(r);
+        } else if (r.ok === false) {
+          stopLoginPoll();
+          $("browser-status").textContent = r.error || "登录未完成";
+          $("browser-status").className = "qr-status err";
+          btn.disabled = false;
+          btn.textContent = origText;
+        } else {
+          $("browser-status").textContent = `已打开 ${d.label} 官方登录页 · 等待登录…`;
+        }
+      } catch (e) {
+        stopLoginPoll();
+        $("browser-status").textContent = e.message;
+        $("browser-status").className = "qr-status err";
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
+    }, 1500);
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = origText;
+    toast(e.message, "err");
+    openManual();
+  }
+}
+
+/** 登录成功统一收尾 */
+function onLoginSuccess(r) {
+  stopLoginPoll();
+  $("qr-status").textContent = "✅ 登录成功，账号已自动添加";
+  $("qr-status").className = "qr-status ok";
+  $("browser-status").textContent = "✅ 登录成功，账号已自动添加";
+  $("browser-status").className = "qr-status ok";
+  $("btn-login-start").textContent = "✅ 已登录";
+  toast(`账号已添加：${r.label || "新账号"}`, "ok");
+  setTimeout(async () => { closeModal(); await load(); }, 900);
+}
+
+function openManual() {
+  $("manual-area").classList.add("show");
+  $("btn-save").style.display = "";
+}
+
+function openModal(acc) {
+  editingId = acc ? acc.id : null;
+  $("modal-title").textContent = acc ? "编辑账号" : "添加账号";
+  $("modal-hint").textContent = acc
+    ? "凭据留空表示不修改原凭据（已加密保存，无法显示）。"
+    : "选择平台后点「登录获取」，你只需扫码，凭据自动保存。";
+  $("f-platform").value = acc ? acc.platform : "mihoyo";
+  $("f-platform").disabled = !!acc;
+  $("f-label").value = acc ? acc.label : "";
+  $("f-cred").value = "";
+
+  resetLoginUI();
+  // 编辑模式：不显示登录按钮（凭据已存在），直接用手改
+  $("login-area").style.display = acc ? "none" : "";
+  $("manual-toggle").style.display = acc ? "none" : "";
+  $("manual-area").classList.toggle("show", !!acc);
+  $("btn-save").style.display = acc ? "" : "none";
+
+  updateCredLabel();
+  $("modal").classList.add("show");
+  setTimeout(() => $("f-label").focus(), 60);
+}
+function closeModal() {
+  stopLoginPoll();
+  resetLoginUI();
+  $("modal").classList.remove("show");
+  editingId = null;
+}function updateCredLabel() {
+  const p = $("f-platform").value;
+  $("f-cred-label").textContent = CRED_LABEL[p] || "凭据";
+  $("f-cred").placeholder = p === "mihoyo"
+    ? "粘贴米游社 Cookie（含 stoken / ltoken / ltuid）"
+    : p === "kuro" ? "粘贴库街区 token（请求头 token 的值）"
+    : "粘贴 access_token（小程序 user/sign 请求里）";
+
+  // 同步「如何获取？」指引
+  const h = HELP[p] || HELP.mihoyo;
+  $("help-title").textContent = `如何获取${PLATFORM_NAME[p] || ""}${CRED_LABEL[p] || ""}？`;
+  $("help-steps").innerHTML = h.steps.map((s) => `<li>${s}</li>`).join("");
+  $("help-warn").innerHTML = h.warn ? "⚠️ " + h.warn : "";
+  // 燕云才显示「粘贴小程序链接」输入框；编辑模式下隐藏（凭据已存在）
+  const linkField = $("yanyun-link-field");
+  if (linkField) linkField.style.display =
+    (p === "yanyun" && $("login-area").style.display !== "none") ? "" : "none";
+
+  // 切换平台时收起帮助，避免内容突然变化
+  $("help-box").classList.remove("open");
+}
+
+async function saveAccount() {
+  const platform = $("f-platform").value;
+  const label = $("f-label").value.trim();
+  const credVal = $("f-cred").value.trim();
+
+  if (!editingId && !credVal) {
+    toast("请先点「登录获取」，或展开手动粘贴凭据", "err");
+    openManual();
+    return;
+  }
+
+  const key = platform === "mihoyo" ? "cookie" : "token";
+  try {
+    if (editingId) {
+      const payload = { label, platform };
+      if (credVal) payload.credential = { [key]: credVal };
+      await api(`/api/accounts/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
+      toast("已保存", "ok");
+    } else {
+      await api("/api/accounts", {
+        method: "POST",
+        body: JSON.stringify({ platform, label, credential: { [key]: credVal } }),
+      });
+      toast("已添加", "ok");
+    }
+    closeModal();
+    await load();
+  } catch (e) {
+    toast(e.message, "err");
+  }
+}
+
+async function deleteAccount(id) {
+  if (!confirm("确定删除这个账号？删除后无法恢复。")) return;
+  try {
+    await api(`/api/accounts/${id}`, { method: "DELETE" });
+    toast("已删除", "ok");
+    await load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function toggleAccount(id) {
+  try {
+    await api(`/api/accounts/${id}/toggle`, { method: "POST", body: "{}" });
+    await load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+// ---------------- 事件绑定 ----------------
+function bindEvents() {
+  $("btn-checkin-all").addEventListener("click", (e) => {
+    if (!accounts.length) { toast("还没有账号", "err"); return; }
+    e.currentTarget.disabled = true;
+    doCheckin(null).finally(() => { e.currentTarget.disabled = false; });
+  });
+
+  $("btn-add").addEventListener("click", () => openModal(null));
+  $("btn-refresh").addEventListener("click", () => { load(); toast("已刷新"); });
+
+  $("btn-cancel").addEventListener("click", closeModal);
+  $("btn-save").addEventListener("click", saveAccount);
+  $("f-platform").addEventListener("change", () => {
+    updateCredLabel();
+    resetLoginUI();
+    if ($("f-platform").value === "yanyun") {
+      $("manual-area").classList.add("show");
+      $("btn-save").style.display = "";
+      $("help-box").classList.add("open");
+      $("modal-hint").textContent = "正在检测本机燕云小程序…";
+      probeYanyun();
+    } else {
+      $("modal-hint").textContent = "选择平台后点「登录获取」，你只需扫码，凭据自动保存。";
+    }
+  });
+  $("btn-login-start").addEventListener("click", startLogin);
+  $("btn-yanyun-link").addEventListener("click", setYanyunLink);
+  $("f-yanyun-link").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") setYanyunLink();
+  });
+  $("manual-toggle").addEventListener("click", openManual);
+  $("help-toggle").addEventListener("click", () => {
+    $("help-box").classList.toggle("open");
+  });
+  $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") closeModal(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeModal();
+    if (e.key === "Enter" && $("modal").classList.contains("show")
+        && e.target.tagName !== "TEXTAREA") saveAccount();
+  });
+
+  // 账号卡片按钮（事件委托，动态元素也能响应）
+  $("account-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn) return;
+    const id = btn.dataset.id;
+    const act = btn.dataset.act;
+    if (act === "sign") doCheckin(id);
+    else if (act === "detect") detectGames(id, btn);
+    else if (act === "edit") openModal(accounts.find(a => a.id === id));
+    else if (act === "toggle") toggleAccount(id);
+    else if (act === "del") deleteAccount(id);
+  });
+}
+
+// ---------------- 检测账号下可签游戏 ----------------
+async function detectGames(id, btn) {
+  const box = $("det-" + id);
+  btn.disabled = true;
+  box.classList.add("show");
+  box.innerHTML = `<div class="det-row">检测中…</div>`;
+  try {
+    const d = await api(`/api/accounts/${id}/detect`);
+    if (!d.ok) { box.innerHTML = `<div class="det-row det-note">${esc(d.error || "检测失败")}</div>`; return; }
+    if (!d.games.length) {
+      box.innerHTML = `<div class="det-row det-note">${esc(d.note || "该账号下未发现可签到的游戏")}</div>`;
+      return;
+    }
+    const rows = d.games.map(g =>
+      `<div class="det-row"><span class="det-game">${esc(g.name)}</span>` +
+      (g.roles && g.roles.length ? `：角色 ${g.roles.map(esc).join("、")}` : "") +
+      `</div>`).join("");
+    const note = d.note ? `<div class="det-row det-note">${esc(d.note)}</div>` : "";
+    box.innerHTML = `<div class="det-row">该账号下有 <b>${d.games.length}</b> 个可签到游戏：</div>${rows}${note}`;
+  } catch (e) {
+    box.innerHTML = `<div class="det-row det-note">${esc(e.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ---------------- 启动 ----------------
+document.addEventListener("DOMContentLoaded", () => {
+  bindEvents();
+  load();
+});
+</script>
+</body>
+</html>

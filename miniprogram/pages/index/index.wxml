@@ -1,0 +1,25 @@
+<view class="container">
+  <button class="btn-primary" type="primary" bindtap="onCheckinAll" loading="{{loading}}">
+    {{loading ? '批量签到中...' : '一键签到（全部账号）'}}
+  </button>
+
+  <view wx:if="{{!hasAccounts}}" class="tip">还没有账号，去「账号管理」添加</view>
+
+  <!-- 账号卡片列表 -->
+  <view class="acct-list">
+    <view wx:for="{{accounts}}" wx:key="id" class="acct-card {{item.enabled ? '' : 'disabled'}}">
+      <view class="acct-head">
+        <text class="acct-name">{{item.label || item.platform}}</text>
+        <text class="acct-plat">{{item.platform}}</text>
+      </view>
+      <view class="acct-meta" wx:if="{{item.last_run}}">
+        上次：{{item.last_run}}｜{{item.last_result}}
+      </view>
+      <view class="acct-actions">
+        <button size="mini" type="primary" data-id="{{item.id}}" bindtap="onCheckinOne">签到</button>
+      </view>
+    </view>
+  </view>
+
+  <navigator url="/pages/settings/settings" class="link">账号管理 ›</navigator>
+</view>
