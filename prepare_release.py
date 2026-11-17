@@ -47,6 +47,7 @@ DIRS: dict[str, set[str] | None] = {
 TOOLS_FILES = [
     "selftest_engine.py", "selftest_store.py", "test_web.py",
     "test_journey.py", "test_credential_refresh.py", "test_stage_a.py",
+    "test_skland.py",
 ]
 
 RELEASE_GITIGNORE = """# 发布仓库自身的忽略规则（用户数据永不入库）

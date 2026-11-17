@@ -43,6 +43,9 @@ def main() -> int:
         "--hidden-import", "store.cloud_store",
         "--hidden-import", "engine.games_config",
         "--hidden-import", "engine.ds",
+        # 森空岛适配器与其纯标准库加密模块（DES/AES/RSA）显式声明，避免漏打包
+        "--hidden-import", "engine.skland",
+        "--hidden-import", "engine.skland_crypto",
         "app_main.py",
     ]
     print("打包命令：", " ".join(cmd))

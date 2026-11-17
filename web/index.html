@@ -114,6 +114,7 @@
   .badge.mihoyo { background: #eef2ff; color: #3b5bdb; }
   .badge.kuro { background: #f3e8ff; color: #8b3fd9; }
   .badge.yanyun { background: #fef3e2; color: #b45309; }
+  .badge.skland { background: #e6fcf5; color: #0ca678; }
   .badge.stub { background: #f1f3f5; color: #6b7280; }
   .badge.todo { background: #fee2e2; color: #b91c1c; font-weight: 600; }
   .badge.pending { background: #fef3c7; color: #92400e; }
@@ -266,7 +267,7 @@
       <div class="logo">签</div>
       <div>
         <h1>游戏签到中心</h1>
-        <div class="subtitle">米游社 · 库街区（鸣潮/战双） · 一键批量签到 <span style="color:#b91c1c">（燕云签到未实现）</span></div>
+        <div class="subtitle">米游社 · 库街区（鸣潮/战双） · 森空岛（明日方舟/终末地，测试中） · 一键批量签到 <span style="color:#b91c1c">（燕云签到未实现）</span></div>
       </div>
     </div>
   </header>
@@ -311,6 +312,7 @@
       <select id="f-platform">
         <option value="mihoyo">米游社（原神 / 星铁 / 绝区零 / 崩3）✅</option>
         <option value="kuro">库街区（鸣潮 / 战双帕弥什）✅</option>
+        <option value="skland">森空岛（明日方舟 / 终末地）· 测试中</option>
         <option value="yanyun">燕云十六声（签到未实现 · 仅唤起小程序）</option>
       </select>
     </div>
@@ -382,8 +384,8 @@
 </div>
 
 <script>
-const PLATFORM_NAME = { mihoyo: "米游社", kuro: "库街区", yanyun: "燕云十六声", stub: "其他" };
-const CRED_LABEL = { mihoyo: "Cookie", kuro: "Token", yanyun: "access_token" };
+const PLATFORM_NAME = { mihoyo: "米游社", kuro: "库街区", yanyun: "燕云十六声", skland: "森空岛", stub: "其他" };
+const CRED_LABEL = { mihoyo: "Cookie", kuro: "Token", yanyun: "access_token", skland: "Token" };
 
 // 各平台凭据获取指引（点「如何获取？」展开）
 const HELP = {
@@ -406,6 +408,16 @@ const HELP = {
       '<b>已有游戏自动识别</b>：鸣潮、战双帕弥什会自动签到；库街区上新游戏也会自动探测（无需改设置）',
     ],
     warn: '库街区发码前有极验人机验证，程序不绕过它——由你在官方页面里正常完成，最安全。没有绑定的游戏不会出现「签到失败」，只在你真正拥有的游戏上签到。',
+  },
+  skland: {
+    steps: [
+      '<b>电脑浏览器</b>打开 <code>https://www.skland.com/</code>，用鹰角账号登录（手机号/扫码均可）',
+      '登录成功后，在同一个浏览器里打开 <code>https://web-api.skland.com/account/info/hg</code>',
+      '页面返回一段 JSON，找到 <code>data.content</code> 字段，把它的<b>完整长字符串</b>复制下来',
+      '粘贴到上方凭据输入框，保存即可；程序会自动识别你绑定的明日方舟 / 终末地角色并分别签到',
+      '<b>支持多角色</b>：明日方舟每个绑定账号签一次，终末地每个角色独立签一次；已签的会自动跳过',
+    ],
+    warn: '【测试中】森空岛协议与设备指纹/签名已按公开实现核对并在线验证，但尚未用真实 token 端到端跑过；若失败请把结果反馈。<b>content 等同于账号凭证，勿外泄</b>。token 失效后需重新登录官网再取一次 content（暂无自动续期）。',
   },
   yanyun: {
     steps: [
@@ -520,6 +532,8 @@ function renderList(resultMap = {}) {
     // 未实现平台 + 自动续期状态：从后端状态字段渲染，前端不自行猜测
     const todoBadge = a.implemented === false
       ? `<span class="badge todo">签到未实现 · 不参与</span>` : "";
+    const betaBadge = (a.status_text && a.status_text.indexOf("测试中") >= 0)
+      ? `<span class="badge pending">测试中</span>` : "";
     const pendingBadge = (a.enabled && a.implemented !== false && a.pending)
       ? `<span class="badge pending">今日未完成</span>` : "";
     const renewLine = (a.renew && a.renew.note)
@@ -530,6 +544,7 @@ function renderList(resultMap = {}) {
       <div class="card-top">
         <span class="badge ${a.platform}">${PLATFORM_NAME[a.platform] || a.platform}</span>
         ${todoBadge}
+        ${betaBadge}
         ${pendingBadge}
         <span class="name">${esc(a.label)}</span>
         <span class="status-dot ${a.enabled ? "on" : ""}" title="${a.enabled ? "启用" : "停用"}"></span>
@@ -656,7 +671,20 @@ async function startLogin() {
   const platform = $("f-platform").value;
   if (platform === "mihoyo") return startMihoyoQR();
   if (platform === "yanyun") return startYanyunManual();
+  if (platform === "skland") return startSklandManual();
   return startBrowserLogin(platform);
+}
+
+/** 森空岛：官网登录后从 info/hg 复制 content，手动粘贴 */
+async function startSklandManual() {
+  resetLoginUI();
+  openManual();
+  const h = HELP.skland;
+  $("help-title").textContent = `如何获取${PLATFORM_NAME.skland} Token？`;
+  $("help-steps").innerHTML = h.steps.map((s) => `<li>${s}</li>`).join("");
+  $("help-warn").innerHTML = h.warn ? "⚠️ " + h.warn : "";
+  $("help-box").classList.add("open");
+  $("modal-hint").textContent = "登录官网后复制 data.content 的完整字符串，粘贴到下方输入框。";
 }
 
 /** 燕云：解析用户粘贴的小程序链接（#小程序:// 或 weixin://dl/business/?appid=） */
@@ -922,6 +950,7 @@ function closeModal() {
   $("f-cred").placeholder = p === "mihoyo"
     ? "粘贴米游社 Cookie（含 stoken / ltoken / ltuid）"
     : p === "kuro" ? "粘贴库街区 token（请求头 token 的值）"
+    : p === "skland" ? "粘贴森空岛 token（info/hg 返回的 data.content）"
     : "粘贴 access_token（小程序 user/sign 请求里）";
 
   // 同步「如何获取？」指引
@@ -1015,6 +1044,9 @@ function bindEvents() {
       $("help-box").classList.add("open");
       $("modal-hint").textContent = "正在检测本机燕云小程序…";
       probeYanyun();
+    } else if ($("f-platform").value === "skland") {
+      $("modal-hint").textContent = "森空岛：登录官网后复制 data.content，点「登录获取」查看步骤。";
+      $("help-box").classList.add("open");
     } else {
       $("modal-hint").textContent = "选择平台后点「登录获取」，你只需扫码，凭据自动保存。";
     }

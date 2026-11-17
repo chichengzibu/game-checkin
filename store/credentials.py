@@ -53,6 +53,10 @@ _MI_FAIL_SIGNALS = (
 _KURO_FAIL_SIGNALS = (
     "token 无效", "已过期", "请重新登录", "登录已过期", "code=220", "令牌",
 )
+_SKLAND_FAIL_SIGNALS = (
+    "用户未登录", "登录已过期", "已过期", "登录失效", "token 无效", "token无效",
+    "凭证无效", "授权失败", "授权码", "未返回授权码", "登出",
+)
 
 
 def _lock_for(account_id: str) -> threading.Lock:
@@ -148,6 +152,9 @@ def public_status(account) -> dict:
                 "note": "库街区无官方刷新接口；token 失效时需重新登录一次"}
     if platform == "yanyun":
         return {"auto_renew": False, "note": "签到未实现"}
+    if platform == "skland":
+        return {"auto_renew": False,
+                "note": "森空岛无 token 刷新接口；失效时需登录官网重取 data.content"}
     return {"auto_renew": False, "note": "该平台不支持自动续期"}
 
 
@@ -273,6 +280,8 @@ def is_auth_failure(platform: str, message: str) -> bool:
         return any(s in m for s in _MI_FAIL_SIGNALS)
     if platform == "kuro":
         return any(s in m for s in _KURO_FAIL_SIGNALS)
+    if platform == "skland":
+        return any(s in m for s in _SKLAND_FAIL_SIGNALS)
     return False
 
 
@@ -284,6 +293,12 @@ def renew(account, store=None, user_id: str = "local") -> tuple[bool, str]:
         return False, (
             "库街区官方没有 token 刷新接口，无法自动续期；请点「登录获取」"
             "用手机号+验证码重新登录一次，程序会自动保存新 token（source=h5）"
+        )
+    if platform == "skland":
+        return False, (
+            "森空岛 token 失效后需重新获取：登录 https://www.skland.com/ 后访问 "
+            "https://web-api.skland.com/account/info/hg ，复制 data.content 的"
+            "完整字符串，粘贴到账号凭据里保存即可（等同重新登录一次）"
         )
     if platform != "mihoyo":
         return False, "该平台不支持自动续期"

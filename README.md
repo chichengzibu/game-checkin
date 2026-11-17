@@ -8,8 +8,17 @@
 |---|---|---|
 | 米游社（原神 / 星铁 / 绝区零 / 崩3） | ✅ 已实现 | 实机核对通过；支持 **stoken 自动续期** |
 | 库街区（鸣潮 / 战双帕弥什） | ✅ 已实现 | 实机核对通过；官方无刷新接口，失效需重新登录一次 |
+| 森空岛（明日方舟 / 终末地） | 🧪 已实现·测试中 | 协议/设备指纹/签名已按公开实现核对并在线验证；**尚未用真实 token 端到端验证** |
 | **燕云十六声** | ❌ **未实现** | **签到不参与自动运行**，见下方说明 |
 | 其他平台 | 占位 | `stub` 仅为示例 |
+
+**森空岛（Skyland）签到说明（测试中）：**
+
+- 覆盖游戏：明日方舟（每个绑定账号签一次）、明日方舟：终末地（每个角色独立签一次），已签角色会自动跳过。
+- Token 获取：登录 <https://www.skland.com/> 后访问 <https://web-api.skland.com/account/info/hg>，复制返回 JSON 里 `data.content` 的完整长字符串，粘贴到「添加账号」的凭据框。它等同于账号凭证，请勿外泄。
+- 技术：`engine/skland.py` 完成 `token → 授权码 → cred → 绑定角色 → 逐角色签到`；请求签名为 `md5(hex(hmac_sha256(cred_token, path+body+timestamp+header_ca)))`。设备指纹 `dId` 与 DES/AES/RSA 均为纯标准库实现（`engine/skland_crypto.py`），已通过 DES/AES/HMAC/RSA 标准向量自检与数美指纹服务在线验证，**无需 pip 安装 extra 加密库**。
+- 边界：token 失效后没有自动续期，需按上面步骤重新取一次 `data.content`（与库街区同类）；协议参考 `kafuneri/Skland-Sign-In`、`AEtherside/skland-daily-attendance` 等成熟开源实现交叉核对。
+- 状态为 `beta`（`IMPLEMENTATION_STATUS["skland"]="beta"`）：**会正常参与自动签到**，UI 会显示「测试中」标记；因作者没有真实 token，尚未端到端跑通真实签到，若遇到失败请反馈结果以便调整。
 
 **燕云十六声签到尚未实现**，请勿当作可用功能：
 
@@ -166,6 +175,8 @@ game-checkin/
 ├── engine/            # 共享签到引擎（只管平台协议）
 │   ├── mihoyo.py      # 米游社（已实机核对，含 V2→V1 cookie 别名修复）
 │   ├── kuro.py        # 库街区（已实机核对）
+│   ├── skland.py      # 森空岛 / 明日方舟 + 终末地（测试中）
+│   ├── skland_crypto.py # 森空岛签名/设备指纹：纯标准库 DES/AES/RSA
 │   ├── netease.py     # 燕云十六声（⚠️ 未实现的实验草稿）
 │   └── ...
 ├── store/             # 账号存储层
@@ -185,6 +196,7 @@ game-checkin/
 
 - **米游社**：4 款游戏 `luna/home` 全部 `rc=0` 返回 30 条奖励；端点 `/event/luna/sign`、盐 `DlOUwIupfU6YespEUWDJmXtutuXV6owG`、app_version `2.109.0`。修复了「能查角色但签到 -100」的 V2/V1 Cookie 名坑。
 - **库街区**：修正 4 处错误 —— 头是 `token`（非 `x-token`）、端点 `/encourage/signIn/v2`、请求体需 `gameId+serverId+roleId+userId+reqMonth`、另有 `/user/signIn` 社区签到。
+- **森空岛（2026-11-17）**：🧪 协议端点（grant / cred / binding / 两个签到端点）全部可达；DES/AES/HMAC/RSA 四组标准向量自检通过；数美设备指纹服务在线返回 `code=1100` + deviceId；认证链与逐项签到用 mock 覆盖（21 项）。**尚无真实 token，未端到端验证真实签到结果**。
 - **燕云十六声**：⚠️ 仅端点探活（无 token 时返回 `code=-1 未登录`），**签到未做真实验证、未实现**。
 - **自动续期端点**：`passport-api.mihoyo.com/account/auth/api/getCookieAccountInfoBySToken`（DS x4）与 `api-takumi.mihoyo.com/auth/api/getCookieAccountInfoBySToken`（回退），已对照公开实现核对。
 
@@ -195,6 +207,7 @@ python tools/selftest_store.py        # 加密 / 隔离 / action 协议
 python tools/selftest_discovery.py    # 游戏自动发现
 python tools/test_credential_refresh.py  # 自动续期（纯 mock，不联网、不碰真实账号库）
 python tools/test_stage_a.py          # 结果分类 / 重试 / 幂等补跑 / 失效禁用（33 项，纯离线）
+python tools/test_skland.py           # 森空岛：加密向量/签名/dId/认证链/逐项签到（21 项，纯离线）
 python tools/test_web.py              # Web API
 ```
 

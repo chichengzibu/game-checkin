@@ -38,7 +38,7 @@ sys.path.insert(0, ROOT)
 import service                                  # noqa: E402
 from engine import (                             # noqa: E402
     IMPLEMENTATION_STATUS, is_implemented, platform_status, status_text,
-    unimplemented_hint,
+    unimplemented_hint, beta_hint,
 )
 from store import credentials, get_store         # noqa: E402
 from store.base import Account                   # noqa: E402
@@ -134,6 +134,22 @@ def detect_account(user_id: str, account_id: str) -> dict:
                     })
                 if not games:
                     note = "未取到角色：Cookie 可能已失效"
+            elif a.platform == "skland":
+                # 森空岛：走完整认证链取绑定角色（只读，不签到）
+                ok, m, _st, bindings = ad.detect_bindings()
+                if not ok:
+                    note = f"森空岛角色检测失败: {m}"
+                else:
+                    for b in bindings:
+                        roles = [r.get("nickname") or r.get("roleId")
+                                 for r in (b.get("roles") or [])]
+                        games.append({
+                            "id": str(b.get("game_id")),
+                            "name": b.get("game") or b.get("app"),
+                            "roles": roles or ["(未取到角色名)"],
+                        })
+                    if not games:
+                        note = "账号未绑定明日方舟/终末地角色（token 可能已失效）"
             else:
                 note = f"平台 {a.platform} 暂不支持角色检测"
         except Exception as e:  # noqa: BLE001
@@ -265,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/accounts":
             data = self._body()
             platform = (data.get("platform") or "").strip()
-            if platform not in ("mihoyo", "kuro", "yanyun", "stub"):
+            if platform not in ("mihoyo", "kuro", "yanyun", "skland", "stub"):
                 return self._json(400, {"ok": False, "error": "平台不合法"})
             cred = data.get("credential") or {}
             if not cred:
@@ -284,6 +300,8 @@ class Handler(BaseHTTPRequestHandler):
             resp = {"ok": True, "id": acc.id}
             if not is_implemented(platform):
                 resp["warning"] = unimplemented_hint(platform)
+            elif platform_status(platform) == "beta":
+                resp["warning"] = beta_hint(platform)
             return self._json(200, resp)
 
         if path == "/api/checkin":

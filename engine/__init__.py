@@ -13,6 +13,7 @@ from .base import CheckinAdapter, CheckinResult, get_session
 from .mihoyo import MihoyoAdapter
 from .kuro import KuroAdapter
 from .netease import YanyunAdapter
+from .skland import SkylandAdapter
 from .others import GenericStubAdapter
 
 # 平台名 -> 适配器类。账号配置里用 "platform" 字段指定。
@@ -20,6 +21,7 @@ REGISTRY = {
     "mihoyo": MihoyoAdapter,
     "kuro": KuroAdapter,
     "yanyun": YanyunAdapter,
+    "skland": SkylandAdapter,
     "stub": GenericStubAdapter,
 }
 
@@ -32,11 +34,13 @@ IMPLEMENTATION_STATUS = {
     "mihoyo": "stable",
     "kuro": "stable",
     "yanyun": "unimplemented",
+    "skland": "beta",
     "stub": "placeholder",
 }
 
 STATUS_TEXT = {
     "stable": "已实现",
+    "beta": "已实现·测试中",
     "unimplemented": "未实现",
     "placeholder": "占位示例",
     "unknown": "未知",
@@ -46,6 +50,14 @@ UNIMPLEMENTED_HINT = {
     "yanyun": (
         "燕云十六声签到【未实现】：现有协议代码未经真实 access_token 验证，"
         "不参与自动签到；「唤起小程序」仅供抓包参考"
+    ),
+}
+
+# beta 平台参与签到，但给出诚实提示（协议/加密链已核对，尚未用真实账号端到端验证）
+BETA_HINT = {
+    "skland": (
+        "森空岛签到为【测试中】：协议与设备指纹/签名已按公开实现核对并在线验证，"
+        "但尚未用真实 token 端到端跑过；若失败请把结果反馈以调整"
     ),
 }
 
@@ -59,7 +71,12 @@ def status_text(platform: str) -> str:
 
 
 def is_implemented(platform: str) -> bool:
-    return platform_status(platform) == "stable"
+    # stable 与 beta 都参与签到；unimplemented / placeholder / unknown 短路
+    return platform_status(platform) in ("stable", "beta")
+
+
+def beta_hint(platform: str) -> str:
+    return BETA_HINT.get(platform, f"平台 {platform} 处于测试中")
 
 
 def unimplemented_hint(platform: str) -> str:
