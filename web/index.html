@@ -116,6 +116,11 @@
   .badge.yanyun { background: #fef3e2; color: #b45309; }
   .badge.stub { background: #f1f3f5; color: #6b7280; }
   .badge.todo { background: #fee2e2; color: #b91c1c; font-weight: 600; }
+  .badge.pending { background: #fef3c7; color: #92400e; }
+  .alert-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412;
+    border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; font-size: 13px; }
+  .alert-bar .btn { margin-left: auto; padding: 7px 12px; font-size: 12.5px; }
   .card-note { font-size: 12px; color: var(--text-2); margin-top: 6px; line-height: 1.5; }
   .card-note.warn { color: #b45309; }
   .name { font-size: 15.5px; font-weight: 600; flex: 1; }
@@ -270,6 +275,11 @@
     <div class="stat"><div class="num" id="stat-total">0</div><div class="lbl">账号总数</div></div>
     <div class="stat"><div class="num" id="stat-enabled" style="color:var(--ok)">0</div><div class="lbl">启用中</div></div>
     <div class="stat"><div class="num" id="stat-signed" style="color:var(--primary)">0</div><div class="lbl">今日已签</div></div>
+  </div>
+
+  <div class="alert-bar" id="alert-bar" style="display:none">
+    <span id="alert-text"></span>
+    <button class="btn" id="btn-checkin-pending">仅补跑未成功账号</button>
   </div>
 
   <div class="actions">
@@ -444,13 +454,36 @@ function toast(msg, type = "") {
 }
 
 // ---------------- 渲染 ----------------
+function todayStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function renderStats() {
   const total = accounts.length;
   const enabled = accounts.filter(a => a.enabled).length;
-  const signed = accounts.filter(a => a.last_run && /成功|已签/.test(a.last_result || "")).length;
+  const today = todayStr();
+  // 优先用后端权威字段 last_ok_date，旧数据退回文本判断
+  const signed = accounts.filter(a =>
+    a.last_ok_date === today ||
+    (!a.last_ok_date && a.last_run && /成功|已签/.test(a.last_result || ""))
+  ).length;
   $("stat-total").textContent = total;
   $("stat-enabled").textContent = enabled;
   $("stat-signed").textContent = signed;
+
+  // 本地失败提醒：定时无人值守时不用翻日志也能看到今天哪些账号没成功
+  const pending = accounts.filter(a =>
+    a.enabled && a.implemented !== false &&
+    (a.pending === true || (a.pending === undefined && a.last_ok_date !== today))
+  ).length;
+  const bar = $("alert-bar");
+  if (pending > 0) {
+    $("alert-text").textContent = `⚠️ 今天还有 ${pending} 个账号未成功，可只补跑这些账号（已成功的不会重复请求）`;
+    bar.style.display = "flex";
+  } else {
+    bar.style.display = "none";
+  }
 }
 
 function esc(s) {
@@ -487,6 +520,8 @@ function renderList(resultMap = {}) {
     // 未实现平台 + 自动续期状态：从后端状态字段渲染，前端不自行猜测
     const todoBadge = a.implemented === false
       ? `<span class="badge todo">签到未实现 · 不参与</span>` : "";
+    const pendingBadge = (a.enabled && a.implemented !== false && a.pending)
+      ? `<span class="badge pending">今日未完成</span>` : "";
     const renewLine = (a.renew && a.renew.note)
       ? `<div class="card-note ${a.renew.auto_renew ? "" : "warn"}">${a.renew.auto_renew ? "🔄 " : "⚠️ "}${esc(a.renew.note)}</div>`
       : "";
@@ -495,6 +530,7 @@ function renderList(resultMap = {}) {
       <div class="card-top">
         <span class="badge ${a.platform}">${PLATFORM_NAME[a.platform] || a.platform}</span>
         ${todoBadge}
+        ${pendingBadge}
         <span class="name">${esc(a.label)}</span>
         <span class="status-dot ${a.enabled ? "on" : ""}" title="${a.enabled ? "启用" : "停用"}"></span>
       </div>
@@ -564,14 +600,17 @@ async function pollTask(taskId) {
   });
 }
 
-async function doCheckin(accountId) {
+async function doCheckin(accountId, opts = {}) {
   try {
+    const body = accountId ? { account_id: accountId } : {};
+    if (opts.onlyPending) body.only_pending = true;
     const data = await api("/api/checkin", {
       method: "POST",
-      body: JSON.stringify(accountId ? { account_id: accountId } : {}),
+      body: JSON.stringify(body),
     });
     await pollTask(data.task_id);
-    toast(accountId ? "签到完成" : "全部签到完成", "ok");
+    toast(opts.onlyPending ? "补跑完成"
+      : (accountId ? "签到完成" : "全部签到完成"), "ok");
   } catch (e) {
     toast(e.message, "err");
   }
@@ -953,6 +992,13 @@ function bindEvents() {
     if (!accounts.length) { toast("还没有账号", "err"); return; }
     e.currentTarget.disabled = true;
     doCheckin(null).finally(() => { e.currentTarget.disabled = false; });
+  });
+
+  $("btn-checkin-pending").addEventListener("click", (e) => {
+    if (!accounts.length) { toast("还没有账号", "err"); return; }
+    e.currentTarget.disabled = true;
+    doCheckin(null, { onlyPending: true })
+      .finally(() => { e.currentTarget.disabled = false; });
   });
 
   $("btn-add").addEventListener("click", () => openModal(null));

@@ -82,6 +82,9 @@ def acct_public(a: Account) -> dict:
         "has_credential": bool(a.credential),
         "last_run": a.last_run,
         "last_result": a.last_result,
+        "last_ok_date": getattr(a, "last_ok_date", None),
+        "fail_streak": int(getattr(a, "fail_streak", 0) or 0),
+        "pending": service.is_pending(a),
         "implemented": is_implemented(a.platform),
         "status_text": status_text(a.platform),
         "renew": credentials.public_status(a),
@@ -141,11 +144,15 @@ def detect_account(user_id: str, account_id: str) -> dict:
 
 # ---------------- 签到任务（后台线程 + 轮询进度） ----------------
 
-def _run_task(task_id: str, only_id: str | None) -> None:
+def _run_task(task_id: str, only_id: str | None,
+              only_pending: bool = False) -> None:
     st = store()
     accounts = st.list_accounts(LOCAL_USER)
     if only_id:
         accounts = [a for a in accounts if a.id == only_id]
+    elif only_pending:
+        # 只补跑当天未完整成功的账号，不给已成功账号重复发请求
+        accounts = [a for a in accounts if a.enabled and service.is_pending(a)]
 
     with TASKS_LOCK:
         # POST /api/checkin 已同步占位；这里只补 total，避免轮询撞上 404
@@ -158,7 +165,10 @@ def _run_task(task_id: str, only_id: str | None) -> None:
 
     for acc in accounts:
         # 传 store 让续期结果能回写加密库，否则服务端单活轮换会让旧 token 彻底失效
-        ok, msg = service._check_one(acc, st, LOCAL_USER)
+        ok, msg, status = service._check_one_ex(acc, st, LOCAL_USER)
+        extra = service.apply_result(acc, ok, status, st, LOCAL_USER)
+        if extra:
+            msg += extra
         st.save_result(LOCAL_USER, acc.id, service._now(), msg)
         with TASKS_LOCK:
             t = TASKS[task_id]
@@ -279,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/checkin":
             data = self._body()
             only = (data.get("account_id") or "").strip() or None
+            # force / only_pending：默认手动点击 = 强制全跑（保持原有直觉）；
+            # only_pending=true 时只补跑当天未成功的账号。
+            only_pending = bool(data.get("only_pending"))
             tid = uuid.uuid4().hex[:12]
             # 同步占位：否则 POST 返回后立刻轮询 status 可能撞上 404
             with TASKS_LOCK:
@@ -286,7 +299,8 @@ class Handler(BaseHTTPRequestHandler):
                     "done": 0, "total": 0, "results": [],
                     "finished": False, "started": False,
                 }
-            threading.Thread(target=_run_task, args=(tid, only), daemon=True).start()
+            threading.Thread(target=_run_task,
+                             args=(tid, only, only_pending), daemon=True).start()
             return self._json(200, {"ok": True, "task_id": tid})
 
         # /api/accounts/<id>/toggle

@@ -33,7 +33,10 @@
 
 from datetime import datetime
 
-from .base import CheckinAdapter, CheckinResult
+from .base import (
+    CheckinAdapter, CheckinResult, summarize,
+    STATUS_OK, STATUS_ALREADY, STATUS_TRANSIENT, STATUS_AUTH, STATUS_FAILED,
+)
 from .games_config import KURO_PROBE_RANGE, kuro_games, save_games
 
 API = "https://api.kurobbs.com"
@@ -161,17 +164,26 @@ class KuroAdapter(CheckinAdapter):
             return {"code": -1, "msg": f"请求失败: {e}"}
 
     @staticmethod
-    def _judge(d: dict) -> tuple[bool, str]:
+    def _judge_status(d: dict) -> tuple[bool, str, str]:
+        """返回 (是否成功, 文案, 分类)。分类供 service 决定重试/续期/禁用。"""
         code = d.get("code")
         msg = d.get("msg") or d.get("message") or ""
         success = d.get("success")
         if code == RC_OK or success is True:
-            return True, "签到成功"
+            return True, "签到成功", STATUS_OK
         if code == RC_ALREADY or any(k in msg for k in ("已签", "重复", "已经签")):
-            return True, "今日已签"
+            return True, "今日已签", STATUS_ALREADY
         if code == 220 or "令牌" in msg or "登录" in msg:
-            return False, "token 无效/已过期，请重新登录"
-        return False, f"失败 code={code} {msg}"
+            return False, "token 无效/已过期，请重新登录", STATUS_AUTH
+        if code == -1 or "请求失败" in msg or "超时" in msg:
+            return False, msg or "请求失败", STATUS_TRANSIENT
+        return False, f"失败 code={code} {msg}", STATUS_FAILED
+
+    @staticmethod
+    def _judge(d: dict) -> tuple[bool, str]:
+        """兼容旧调用方，只返回 (是否成功, 文案)。"""
+        ok, msg, _st = KuroAdapter._judge_status(d)
+        return ok, msg
 
     def _do_sign(self) -> CheckinResult:
         owned = self.discover_games()
@@ -179,19 +191,23 @@ class KuroAdapter(CheckinAdapter):
         # token 失效的判定：连一个游戏都查不到，且社区签到也报登录失效
         if not owned:
             bbs = self._bbs_sign()
-            s, m = self._judge(bbs)
-            if not s and ("token" in m or "登录" in m):
+            _s, m, st = self._judge_status(bbs)
+            if st == STATUS_AUTH:
                 return CheckinResult(
-                    platform=self.name, success=False,
+                    platform=self.name, success=False, status=STATUS_AUTH,
                     message=f"未发现任何游戏账号：{m}",
                 )
+            items = [{"name": "社区", "status": st, "message": m}]
+            ok, status = summarize(items)
             return CheckinResult(
-                platform=self.name, success=s,
+                platform=self.name, success=ok, status=status,
                 message=f"该账号在库街区没有可签到的游戏; 社区 {m}",
+                items=items,
             )
 
         known = kuro_games()
-        details, ok = [], False
+        details: list[str] = []
+        items: list[dict] = []
         newly = {}
 
         for gid, roles in sorted(owned.items(), key=lambda kv: int(kv[0])):
@@ -209,8 +225,8 @@ class KuroAdapter(CheckinAdapter):
                 role_name = role.get("roleName") or ""
                 tag = f"{gname}{f'({role_name})' if role_name else ''}"
                 d = self._sign_reward(str(role.get("gameId", gid)), server_id, role_id, user_id)
-                s, m = self._judge(d)
-                ok = ok or s
+                _s, m, st = self._judge_status(d)
+                items.append({"name": tag, "status": st, "message": m})
                 details.append(f"{tag} {m}")
 
         if newly:
@@ -221,8 +237,13 @@ class KuroAdapter(CheckinAdapter):
 
         # 社区签到（与游戏奖励相互独立）
         d = self._bbs_sign()
-        s, m = self._judge(d)
-        ok = ok or s
+        _s, m, st = self._judge_status(d)
+        items.append({"name": "社区", "status": st, "message": m})
         details.append(f"社区 {m}")
 
-        return CheckinResult(platform=self.name, success=ok, message="; ".join(details))
+        # 不再用 `ok = ok or s`：社区成功不再掩盖游戏签到失败
+        ok, status = summarize(items)
+        return CheckinResult(
+            platform=self.name, success=ok, status=status,
+            message="; ".join(details), items=items,
+        )

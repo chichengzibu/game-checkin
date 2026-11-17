@@ -93,7 +93,10 @@ def cmd_checkin(args) -> None:
             return
         results = []
         for a in accs:
-            ok, msg = service._check_one(a)
+            ok, msg, status = service._check_one_ex(a, _store(), LOCAL_USER)
+            extra = service.apply_result(a, ok, status, _store(), LOCAL_USER)
+            if extra:
+                msg += extra
             _store().save_result(LOCAL_USER, a.id, service._now(), msg)
             results.append({"label": a.label or a.platform, "success": ok, "message": msg})
     else:

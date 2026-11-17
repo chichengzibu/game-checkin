@@ -10,8 +10,19 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
+
+# ---- 结果分类（供 service 决定重试 / 续期 / 禁用，绝不靠猜 message）----
+# 适配器能判定的就填 status；填不出来时 service 会从 message 做兜底推断，
+# 保证历史适配器与离线测试构造的 CheckinResult 行为不变。
+STATUS_OK = "ok"                # 全部成功
+STATUS_PARTIAL = "partial"      # 部分游戏成功、部分失败
+STATUS_ALREADY = "already"      # 今日已签（幂等命中，视为成功）
+STATUS_TRANSIENT = "transient"  # 网络超时 / 5xx / 连接重置，可退避重试
+STATUS_AUTH = "auth"            # 登录态失效，走续期或提示重登
+STATUS_CAPTCHA = "captcha"      # 触发人机验证，绝不自动重试
+STATUS_FAILED = "failed"        # 其他确定性失败
 
 
 @dataclass
@@ -20,6 +31,32 @@ class CheckinResult:
     success: bool
     message: str = ""
     raw: Optional[dict] = None  # 平台原始返回，便于排错
+    # 新增字段一律带默认值，旧的 4 处位置参数构造全部保持兼容
+    status: str = ""            # 见上方常量；空 = 由 service 兜底推断
+    items: list = field(default_factory=list)  # 逐项明细：[{"name","status","message"}]
+
+
+def summarize(items: list) -> tuple[bool, str]:
+    """把逐项结果汇总成 (success, status)，避免 `ok = ok or s` 吞掉部分失败。
+
+    - 全部成功/今日已签   -> (True,  ok)
+    - 有成功也有失败       -> (True,  partial)：不算完成，调度器下次会补跑
+    - 全失败               -> (False, 最主要的一类失败)，优先级见下
+    """
+    good = (STATUS_OK, STATUS_ALREADY)
+    if not items:
+        return False, STATUS_FAILED
+    oks = [i for i in items if i.get("status") in good]
+    bads = [i for i in items if i.get("status") not in good]
+    if not bads:
+        return True, STATUS_OK
+    if oks:
+        return True, STATUS_PARTIAL
+    rank = [STATUS_AUTH, STATUS_CAPTCHA, STATUS_TRANSIENT, STATUS_FAILED]
+    for st in rank:
+        if any(i.get("status") == st for i in bads):
+            return False, st
+    return False, STATUS_FAILED
 
 
 class _Response:

@@ -41,7 +41,11 @@ import json
 import random
 import time
 
-from .base import CheckinAdapter, CheckinResult
+from .base import (
+    CheckinAdapter, CheckinResult, summarize,
+    STATUS_OK, STATUS_ALREADY, STATUS_TRANSIENT, STATUS_AUTH,
+    STATUS_CAPTCHA, STATUS_FAILED,
+)
 from .games_config import mihoyo_games
 
 WEB_API = "https://api-takumi.mihoyo.com"
@@ -176,12 +180,18 @@ class MihoyoAdapter(CheckinAdapter):
             return CheckinResult(
                 platform=self.name,
                 success=False,
+                status=STATUS_AUTH,
                 message="未取到游戏角色：Cookie 已失效，或账号下确实没有米游社游戏角色",
             )
 
-        details, ok = [], False
+        details: list[str] = []
+        items: list[dict] = []
         seen = set()
         unknown: dict[str, str] = {}   # 有新角色但未配置签到活动的游戏
+
+        def add(tag: str, status: str, text: str) -> None:
+            items.append({"name": tag, "status": status, "message": text})
+            details.append(f"{tag} {text}")
 
         for role in roles:
             biz = role.get("game_biz", "")
@@ -194,10 +204,10 @@ class MihoyoAdapter(CheckinAdapter):
             if (cfg["key"], uid) in seen:
                 continue
             seen.add((cfg["key"], uid))
+            tag = f"{cfg['name']}({uid})"
 
             if self._is_signed_today(cfg, region, uid) is True:
-                ok = True
-                details.append(f"{cfg['name']}({uid}) 今日已签")
+                add(tag, STATUS_ALREADY, "今日已签")
                 continue
 
             body = json.dumps(
@@ -213,22 +223,20 @@ class MihoyoAdapter(CheckinAdapter):
                 )
                 data = r.json()
             except Exception as e:
-                details.append(f"{cfg['name']}({uid}) 请求失败: {e}")
+                add(tag, STATUS_TRANSIENT, f"请求失败: {e}")
                 continue
 
             code, msg = data.get("retcode"), (data.get("message") or "ok")
             if code == RC_OK:
-                ok = True
-                details.append(f"{cfg['name']}({uid}) 签到成功")
+                add(tag, STATUS_OK, "签到成功")
             elif code == RC_ALREADY:
-                ok = True
-                details.append(f"{cfg['name']}({uid}) 今日已签")
+                add(tag, STATUS_ALREADY, "今日已签")
             elif code == RC_NOT_LOGIN:
-                details.append(f"{cfg['name']}({uid}) Cookie 失效，需重新登录")
+                add(tag, STATUS_AUTH, "Cookie 失效，需重新登录")
             elif code == RC_CAPTCHA:
-                details.append(f"{cfg['name']}({uid}) 触发人机验证(1034)，请到米游社 App 处理")
+                add(tag, STATUS_CAPTCHA, "触发人机验证(1034)，请到米游社 App 处理")
             else:
-                details.append(f"{cfg['name']}({uid}) 失败 retcode={code} {msg}")
+                add(tag, STATUS_FAILED, f"失败 retcode={code} {msg}")
 
         if unknown:
             # 有新游戏但本地没配 act_id —— 明确提示怎么补，而不是静默跳过
@@ -237,9 +245,16 @@ class MihoyoAdapter(CheckinAdapter):
                 f"发现新游戏未配置签到活动({names})，请在 config/games.json 补 act_id"
             )
 
-        if not details:
+        if not items:
             return CheckinResult(
-                platform=self.name, success=False,
-                message="账号角色中没有可签到的米游社游戏",
+                platform=self.name, success=False, status=STATUS_FAILED,
+                message="账号角色中没有可签到的米游社游戏"
+                        + ("；" + "; ".join(details) if details else ""),
+                items=items,
             )
-        return CheckinResult(platform=self.name, success=ok, message="; ".join(details))
+        # 不再用 `ok = ok or s`：部分成功会被如实标成 partial
+        ok, status = summarize(items)
+        return CheckinResult(
+            platform=self.name, success=ok, status=status,
+            message="; ".join(details), items=items,
+        )

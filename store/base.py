@@ -17,6 +17,9 @@ class Account:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     last_run: Optional[str] = None
     last_result: Optional[str] = None
+    # 幂等与失效治理（阶段 A）：均为可选字段，旧 vault 缺字段时自动回落
+    last_ok_date: Optional[str] = None   # 最近一次「完整成功」的日期 YYYY-MM-DD
+    fail_streak: int = 0                # 连续「确定性失败」次数，成功即清零
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -36,6 +39,8 @@ class Account:
                 id=d.get("id") or uuid.uuid4().hex,
                 last_run=d.get("last_run"),
                 last_result=d.get("last_result"),
+                last_ok_date=d.get("last_ok_date"),
+                fail_streak=int(d.get("fail_streak") or 0),
             )
         # 旧格式迁移：把散落的 cookie/token 收进 credential
         cred = {}

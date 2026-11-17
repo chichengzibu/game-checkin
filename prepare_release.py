@@ -45,7 +45,7 @@ DIRS: dict[str, set[str] | None] = {
 # tools/ 只放「纯 mock / 临时库」的回归测试，显式白名单
 TOOLS_FILES = [
     "selftest_engine.py", "selftest_store.py", "test_web.py",
-    "test_journey.py", "test_credential_refresh.py",
+    "test_journey.py", "test_credential_refresh.py", "test_stage_a.py",
 ]
 
 RELEASE_GITIGNORE = """# 发布仓库自身的忽略规则（用户数据永不入库）
