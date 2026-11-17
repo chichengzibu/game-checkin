@@ -56,6 +56,16 @@ def main() -> int:
     if os.path.isfile(src_readme):
         shutil.copy2(src_readme, os.path.join(DIST, "README.md"))
 
+    # README 里的界面预览图一起带上，否则离线打开 README 会出现死链
+    shots_src = os.path.join(ROOT, "docs", "screenshots")
+    if os.path.isdir(shots_src):
+        shots_dst = os.path.join(DIST, "docs", "screenshots")
+        os.makedirs(shots_dst, exist_ok=True)
+        for fn in sorted(os.listdir(shots_src)):
+            if fn.lower().endswith((".png", ".jpg", ".svg", ".webp")):
+                shutil.copy2(os.path.join(shots_src, fn),
+                             os.path.join(shots_dst, fn))
+
     # ---- 安全闸：exe 目录里绝不允许出现任何用户数据 ----
     forbidden = []
     for base, _dirs, files in os.walk(DIST):

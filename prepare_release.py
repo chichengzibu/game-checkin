@@ -38,6 +38,7 @@ DIRS: dict[str, set[str] | None] = {
     "store": None,
     "local": None,
     "web": {".py", ".html", ".js", ".css"},
+    "docs": {".png", ".jpg", ".svg", ".webp"},   # README 界面预览图
     "cloud": {".py", ".json", ".txt"},
     "miniprogram": {".js", ".json", ".wxss", ".wxml", ".png", ".jpg", ".svg"},
 }
