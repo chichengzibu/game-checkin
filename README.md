@@ -15,7 +15,8 @@
 **森空岛（Skyland）签到说明（测试中）：**
 
 - 覆盖游戏：明日方舟（每个绑定账号签一次）、明日方舟：终末地（每个角色独立签一次），已签角色会自动跳过。
-- Token 获取：登录 <https://www.skland.com/> 后访问 <https://web-api.skland.com/account/info/hg>，复制返回 JSON 里 `data.content` 的完整长字符串，粘贴到「添加账号」的凭据框。它等同于账号凭证，请勿外泄。
+- **Token 获取（自动）**：在「添加账号」里选森空岛、点「登录获取」，程序会打开官网登录页，你用鹰角账号正常登录后，程序自动通过页面上下文读取 `info/hg` 的 `data.content` 并保存，**无需手动复制**。登录态只留在临时浏览器 profile，程序不接触你的账号密码；浏览器登录同样基于 CDP 纯标准库实现（与库街区一致）。
+- Token 获取（手动兜底）：也可展开「手动粘贴凭据」，自行登录 <https://www.skland.com/> 后访问 <https://web-api.skland.com/account/info/hg>，复制 `data.content` 的完整长字符串填入。它等同于账号凭证，请勿外泄。
 - 技术：`engine/skland.py` 完成 `token → 授权码 → cred → 绑定角色 → 逐角色签到`；请求签名为 `md5(hex(hmac_sha256(cred_token, path+body+timestamp+header_ca)))`。设备指纹 `dId` 与 DES/AES/RSA 均为纯标准库实现（`engine/skland_crypto.py`），已通过 DES/AES/HMAC/RSA 标准向量自检与数美指纹服务在线验证，**无需 pip 安装 extra 加密库**。
 - 边界：token 失效后没有自动续期，需按上面步骤重新取一次 `data.content`（与库街区同类）；协议参考 `kafuneri/Skland-Sign-In`、`AEtherside/skland-daily-attendance` 等成熟开源实现交叉核对。
 - 状态为 `beta`（`IMPLEMENTATION_STATUS["skland"]="beta"`）：**会正常参与自动签到**，UI 会显示「测试中」标记；因作者没有真实 token，尚未端到端跑通真实签到，若遇到失败请反馈结果以便调整。

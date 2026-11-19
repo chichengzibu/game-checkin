@@ -475,6 +475,9 @@ class Handler(BaseHTTPRequestHandler):
                         "device_id": str(uuid.uuid4()),
                         **(st.get("renewal") or {}),
                     })
+                elif sess.platform == "skland":
+                    # 森空岛：info/hg 返回的 data.content 就是签到 token
+                    cred = {"token": token_val or cookie_val}
                 else:
                     cred = {"token": token_val} if token_val else {"cookie": cookie_val}
 

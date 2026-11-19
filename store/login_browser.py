@@ -63,6 +63,17 @@ PLATFORMS = {
         "label": "燕云十六声",
         "hint": "燕云请走微信小程序抓包后手动粘贴 access_token（网页自动抓取不可行）",
     },
+    "skland": {
+        # 森空岛：登录后由页面上下文 fetch info/hg 拿 data.content（即签到 token）。
+        # 该接口对 www.skland.com 放行 CORS 且 Allow-Credentials=true，
+        # 所以页面内 fetch(credentials:'include') 可带上登录态拿到 content。
+        "login_url": "https://www.skland.com/",
+        "cookie_names": [],
+        "storage_keys": [],
+        "fetch_token_url": "https://web-api.skland.com/account/info/hg",
+        "label": "森空岛",
+        "hint": "在打开的页面里用鹰角账号登录（手机号/验证码或扫码）；登录后程序自动读取凭证，无需手动复制",
+    },
 }
 
 # ---------------- 燕云小程序唤起（Windows 微信 明文 URL Scheme） ----------------
@@ -1042,6 +1053,32 @@ class BrowserLoginSession:
         except Exception:
             return ""
 
+    def fetch_json(self, url: str) -> dict:
+        """在页面上下文里带登录态 fetch 一个 JSON 接口并返回解析后的 dict。
+
+        用于森空岛：登录态在浏览器 cookie/localStorage，页面内 fetch 才能带上；
+        info/hg 对 www.skland.com 放行 CORS + credentials，故可跨子域读取。
+        """
+        try:
+            self._enable_domains()
+            # 用 async IIFE + awaitPromise，确保拿到响应体再返回
+            expr = (
+                "(async()=>{try{"
+                "const r=await fetch(" + json.dumps(url) +
+                ",{credentials:'include',headers:{'Accept':'application/json'}});"
+                "return await r.text();"
+                "}catch(e){return '__ERR__'+String(e)}})()"
+            )
+            resp = self._call("Runtime.evaluate", {
+                "expression": expr, "returnByValue": True, "awaitPromise": True,
+            })
+            val = ((resp.get("result") or {}).get("result") or {}).get("value")
+            if not val or str(val).startswith("__ERR__"):
+                return {}
+            return json.loads(val)
+        except Exception:
+            return {}
+
     def poll_cookies(self) -> dict:
         """检查是否已登录。返回 {status, cookies?, token?, cookie?}。"""
         if not self.started:
@@ -1082,6 +1119,16 @@ class BrowserLoginSession:
                                 ls_hit[k] = ls[k]
                     except Exception:
                         pass
+
+        # 森空岛：登录后 fetch info/hg，取 data.content 作为 token
+        if self.platform == "skland":
+            fetch_url = self.cfg.get("fetch_token_url")
+            d = self.fetch_json(fetch_url) if fetch_url else {}
+            content = ((d.get("data") or {}).get("content") or "") if isinstance(d, dict) else ""
+            if content:
+                return {"status": "Confirmed", "token": content,
+                        "cookie": content, "source": "info/hg"}
+            return {"status": "Waiting", "url": self._cur_url()}
 
         # 库街区：优先用 localStorage.auth_token
         if self.platform == "kuro":

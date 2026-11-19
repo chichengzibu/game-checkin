@@ -411,13 +411,13 @@ const HELP = {
   },
   skland: {
     steps: [
-      '<b>电脑浏览器</b>打开 <code>https://www.skland.com/</code>，用鹰角账号登录（手机号/扫码均可）',
-      '登录成功后，在同一个浏览器里打开 <code>https://web-api.skland.com/account/info/hg</code>',
-      '页面返回一段 JSON，找到 <code>data.content</code> 字段，把它的<b>完整长字符串</b>复制下来',
-      '粘贴到上方凭据输入框，保存即可；程序会自动识别你绑定的明日方舟 / 终末地角色并分别签到',
+      '点上方<b>「登录获取」</b>按钮，会自动打开森空岛官网登录页',
+      '在弹出的浏览器窗口里用<b>鹰角账号</b>登录（手机号+验证码或扫码，验证码你自己收）',
+      '登录成功后程序会<b>自动读取凭证并添加账号</b>，无需手动复制任何东西',
       '<b>支持多角色</b>：明日方舟每个绑定账号签一次，终末地每个角色独立签一次；已签的会自动跳过',
+      '若浏览器没有弹出，请允许本程序启动 Edge / Chrome；或展开「手动粘贴凭据」自行填入 token',
     ],
-    warn: '【测试中】森空岛协议与设备指纹/签名已按公开实现核对并在线验证，但尚未用真实 token 端到端跑过；若失败请把结果反馈。<b>content 等同于账号凭证，勿外泄</b>。token 失效后需重新登录官网再取一次 content（暂无自动续期）。',
+    warn: '【测试中】森空岛协议与设备指纹/签名已按公开实现核对并在线验证，但尚未用真实 token 端到端跑过；若失败请把结果反馈。程序只读取官网登录态、不上传你的账号密码。token 失效后需重新点「登录获取」登录一次（暂无自动续期）。',
   },
   yanyun: {
     steps: [
@@ -666,25 +666,13 @@ function renderQR(text) {
   }
 }
 
-/** 统一登录入口：米游社走扫码，库街区开浏览器登录页，燕云走微信小程序抓包 */
+/** 统一登录入口：米游社走扫码，库街区/森空岛开浏览器登录页，燕云走微信小程序抓包 */
 async function startLogin() {
   const platform = $("f-platform").value;
   if (platform === "mihoyo") return startMihoyoQR();
   if (platform === "yanyun") return startYanyunManual();
-  if (platform === "skland") return startSklandManual();
+  // 森空岛：跳转官网登录，登录后自动读取 info/hg 的 data.content，无需手动复制
   return startBrowserLogin(platform);
-}
-
-/** 森空岛：官网登录后从 info/hg 复制 content，手动粘贴 */
-async function startSklandManual() {
-  resetLoginUI();
-  openManual();
-  const h = HELP.skland;
-  $("help-title").textContent = `如何获取${PLATFORM_NAME.skland} Token？`;
-  $("help-steps").innerHTML = h.steps.map((s) => `<li>${s}</li>`).join("");
-  $("help-warn").innerHTML = h.warn ? "⚠️ " + h.warn : "";
-  $("help-box").classList.add("open");
-  $("modal-hint").textContent = "登录官网后复制 data.content 的完整字符串，粘贴到下方输入框。";
 }
 
 /** 燕云：解析用户粘贴的小程序链接（#小程序:// 或 weixin://dl/business/?appid=） */

@@ -338,7 +338,73 @@ class TestDetectBindings(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------
-# 6. 注册表与门闸
+# 6. 浏览器自动登录（森林空岛 info/hg -> data.content）
+# --------------------------------------------------------------------------
+
+class TestBrowserAutoLogin(unittest.TestCase):
+    def test_platform_registered_with_fetch_url(self):
+        from store.login_browser import PLATFORMS
+        cfg = PLATFORMS.get("skland")
+        self.assertIsNotNone(cfg)
+        self.assertEqual(cfg["fetch_token_url"],
+                         "https://web-api.skland.com/account/info/hg")
+        self.assertEqual(cfg["login_url"], "https://www.skland.com/")
+
+    def test_poll_extracts_content_from_info_hg(self):
+        """登录后 info/hg 返回 {code:0,data:{content}} -> Confirmed + token。"""
+        from store.login_browser import BrowserLoginSession
+        sess = BrowserLoginSession("skland")
+        sess.started = True
+        sess.get_cookies = lambda: []
+        sess._enable_domains = lambda: None
+        sess.fetch_json = lambda url: {
+            "code": 0, "data": {"content": "SKLAND_TOKEN_abcdefghijklmnop"}}
+        st = sess.poll_cookies()
+        self.assertEqual(st["status"], "Confirmed")
+        self.assertEqual(st["token"], "SKLAND_TOKEN_abcdefghijklmnop")
+        self.assertEqual(st["source"], "info/hg")
+
+    def test_poll_waits_when_not_logged_in(self):
+        from store.login_browser import BrowserLoginSession
+        sess = BrowserLoginSession("skland")
+        sess.started = True
+        sess.get_cookies = lambda: []
+        sess._enable_domains = lambda: None
+        sess.fetch_json = lambda url: {"message": "Unauthorized", "statusCode": 401}
+        sess._cur_url = lambda: "https://www.skland.com/"
+        st = sess.poll_cookies()
+        self.assertEqual(st["status"], "Waiting")
+
+    def test_poll_waits_when_fetch_empty(self):
+        from store.login_browser import BrowserLoginSession
+        sess = BrowserLoginSession("skland")
+        sess.started = True
+        sess.get_cookies = lambda: []
+        sess._enable_domains = lambda: None
+        sess.fetch_json = lambda url: {}
+        sess._cur_url = lambda: "https://www.skland.com/"
+        self.assertEqual(sess.poll_cookies()["status"], "Waiting")
+
+    def test_fetch_json_returns_empty_on_eval_error(self):
+        """Runtime.evaluate 出错或 fetch 抛异常时返回空 dict，不抛给上层。"""
+        from store.login_browser import BrowserLoginSession
+        sess = BrowserLoginSession("skland")
+        sess._call = lambda *a, **k: {"error": "timeout"}
+        self.assertEqual(sess.fetch_json("https://web-api.skland.com/account/info/hg"), {})
+
+    def test_fetch_json_parses_response_text(self):
+        from store.login_browser import BrowserLoginSession
+        sess = BrowserLoginSession("skland")
+        payload = '{"code":0,"data":{"content":"TOKEN_XYZ"}}'
+        sess._enable_domains = lambda: None
+        sess._call = lambda *a, **k: {
+            "result": {"result": {"value": payload}}}
+        d = sess.fetch_json("https://web-api.skland.com/account/info/hg")
+        self.assertEqual(d["data"]["content"], "TOKEN_XYZ")
+
+
+# --------------------------------------------------------------------------
+# 7. 注册表与门闸
 # --------------------------------------------------------------------------
 
 class TestRegistry(unittest.TestCase):
