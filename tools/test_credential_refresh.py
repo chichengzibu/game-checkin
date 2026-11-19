@@ -19,9 +19,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 import service  # noqa: E402
+from engine.base import STATUS_AUTH, STATUS_FAILED  # noqa: E402
+from engine.mihoyo import MihoyoAdapter  # noqa: E402
 from store import credentials  # noqa: E402
 from store.base import Account  # noqa: E402
 from store.local_store import resolve_master_key  # noqa: E402
+from store.login_browser import PLATFORMS  # noqa: E402
 
 
 class _Resp:
@@ -217,6 +220,117 @@ class TestRenew(unittest.TestCase):
         # 第二次不再回写
         credentials.prepare(acc, store, "local")
         self.assertEqual(len(store.updated), 1)
+
+
+class TestHealthCheckUsesSign口径(unittest.TestCase):
+    """角色接口宽松、luna/info 严格：必须以后者为准。"""
+
+    def _session(self, roles_payload, info_retcode):
+        def router(url, kw):
+            if "getUserGameRolesByCookie" in url:
+                return roles_payload
+            if "/luna/info" in url:
+                return {"retcode": info_retcode, "data": {"is_sign": False}}
+            raise AssertionError(f"非预期请求: {url}")
+        return _FakeSession(router)
+
+    def test_luna_minus100_overrides_ok_roles(self):
+        roles = {"retcode": 0, "data": {"list": [
+            {"game_biz": "hk4e_cn", "region": "cn_gf01", "game_uid": "123"},
+        ]}}
+        with mock.patch.object(credentials, "get_session",
+                               return_value=self._session(roles, -100)):
+            self.assertIs(credentials.mihoyo_cookie_valid(
+                {"cookie": FAKE_COOKIE}), False)
+
+    def test_luna_ok_means_valid(self):
+        roles = {"retcode": 0, "data": {"list": [
+            {"game_biz": "hk4e_cn", "region": "cn_gf01", "game_uid": "123"},
+        ]}}
+        with mock.patch.object(credentials, "get_session",
+                               return_value=self._session(roles, 0)):
+            self.assertIs(credentials.mihoyo_cookie_valid(
+                {"cookie": FAKE_COOKIE}), True)
+
+    def test_roles_minus100_means_invalid(self):
+        with mock.patch.object(credentials, "get_session", return_value=(
+                self._session({"retcode": -100, "message": "not login"}, 0))):
+            self.assertIs(credentials.mihoyo_cookie_valid(
+                {"cookie": FAKE_COOKIE}), False)
+
+    def test_no_roles_is_not_auth_problem(self):
+        with mock.patch.object(credentials, "get_session", return_value=(
+                self._session({"retcode": 0, "data": {"list": []}}, 0))):
+            self.assertIs(credentials.mihoyo_cookie_valid(
+                {"cookie": FAKE_COOKIE}), True)
+
+
+class TestForceRenew(unittest.TestCase):
+    def _acc(self):
+        return Account(platform="mihoyo", label="测试",
+                       credential=credentials.enrich_mihoyo({"cookie": FAKE_COOKIE}))
+
+    def test_sign_auth_forces_exchange_even_if_healthcheck_says_ok(self):
+        acc, store = self._acc(), _MemStore()
+        with mock.patch.object(credentials, "mihoyo_cookie_valid",
+                               return_value=True) as check, \
+             mock.patch.object(credentials, "exchange_cookie_token",
+                               return_value=("NEW", "ok")) as ex:
+            ok, note = credentials.renew(acc, store, "local", force=True)
+        self.assertTrue(ok, note)
+        check.assert_not_called()
+        ex.assert_called_once()
+        self.assertEqual(credentials.parse_cookie(acc.credential["cookie"])[
+            "cookie_token_v2"], "NEW")
+
+    def test_manual_renew_does_not_burn_valid_token(self):
+        acc = self._acc()
+        with mock.patch.object(credentials, "mihoyo_cookie_valid",
+                               return_value=True), \
+             mock.patch.object(credentials, "exchange_cookie_token") as ex:
+            ok, note = credentials.renew(acc, _MemStore(), "local")
+        self.assertFalse(ok)
+        self.assertIn("无需续期", note)
+        ex.assert_not_called()
+
+    def test_no_stoken_hint_explains_root_cause(self):
+        acc = Account(platform="mihoyo", credential={"cookie": "ltuid_v2=1"})
+        ok, note = credentials.renew(acc, _MemStore(), "local", force=True)
+        self.assertFalse(ok)
+        self.assertIn("stoken", note)
+        self.assertIn("扫码", note)
+
+
+class TestBrowserLoginCapturesRenewal(unittest.TestCase):
+    def test_mihoyo_browser_login_collects_stoken(self):
+        names = PLATFORMS["mihoyo"]["cookie_names"]
+        for n in ("stoken", "stuid", "mid", "cookie_token", "cookie_token_v2",
+                  "account_id", "account_id_v2"):
+            self.assertIn(n, names)
+
+
+class TestRoleFailureClassification(unittest.TestCase):
+    def _adapter(self, payload):
+        return MihoyoAdapter(payload)
+
+    def test_no_roles_is_not_auth_failure(self):
+        class S:
+            def get(self, url, **kw):
+                return _Resp({"retcode": 0, "data": {"list": []}})
+        ad = self._adapter({"cookie": FAKE_COOKIE})
+        ad.session = S()
+        res = ad.sign_in()
+        self.assertEqual(res.status, STATUS_FAILED)
+        self.assertIn("没有", res.message)
+
+    def test_roles_minus100_is_auth_failure(self):
+        class S:
+            def get(self, url, **kw):
+                return _Resp({"retcode": -100, "message": "not login"})
+        ad = self._adapter({"cookie": FAKE_COOKIE})
+        ad.session = S()
+        res = ad.sign_in()
+        self.assertEqual(res.status, STATUS_AUTH)
 
 
 class TestServiceWiring(unittest.TestCase):

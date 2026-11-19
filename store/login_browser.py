@@ -38,10 +38,19 @@ import urllib.request
 PLATFORMS = {
     "mihoyo": {
         "login_url": "https://user.mihoyo.com/",
-        "cookie_names": ["ltuid_v2", "ltoken_v2", "ltuid", "ltoken"],
+        # 必须整套抓：只抓 ltuid/ltoken 时凭据里没有 stoken，
+        # 自动续期永远无法启用，用户隔几天就要重新登录一次。
+        # 米游社把 stoken/cookie_token 也下发给 *.mihoyo.com，
+        # CDP Network.getAllCookies 能读到 HttpOnly cookie，这里按名字收齐。
+        "cookie_names": [
+            "ltuid_v2", "ltoken_v2", "ltuid", "ltoken",
+            "stoken", "stuid", "mid",
+            "cookie_token", "cookie_token_v2",
+            "account_id", "account_id_v2",
+        ],
         "storage_keys": [],
         "label": "米游社",
-        "hint": "在打开的页面里扫码或输账号密码登录",
+        "hint": "在打开的页面里扫码或输账号密码登录（程序会自动保存 stoken 启用长期续期）",
     },
     "kuro": {
         "login_url": "https://www.kurobbs.com/login",

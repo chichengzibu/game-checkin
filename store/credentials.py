@@ -32,7 +32,7 @@ import uuid
 from datetime import datetime
 
 from engine.base import get_session
-from engine.mihoyo import APP_VERSION, ROLES_URL, gen_ds, normalize_cookie
+from engine.mihoyo import APP_VERSION, GAMES, ROLES_URL, gen_ds, normalize_cookie
 
 PASSPORT_STOKEN_URL = (
     "https://passport-api.mihoyo.com/account/auth/api/getCookieAccountInfoBySToken"
@@ -146,7 +146,8 @@ def public_status(account) -> dict:
             return {"auto_renew": True,
                     "note": "已启用自动续期（stoken 有效时无需重新登录）"}
         return {"auto_renew": False,
-                "note": "未保存 stoken：请用「登录获取」登录一次以启用自动续期"}
+                "note": "未保存 stoken：请点「登录获取」扫码重登一次（约 2 分钟），"
+                        "程序会保存 stoken，此后 cookie 过期也能自动续期"}
     if platform == "kuro":
         return {"auto_renew": False,
                 "note": "库街区无官方刷新接口；token 失效时需重新登录一次"}
@@ -161,29 +162,66 @@ def public_status(account) -> dict:
 # ---------------- 健康检查与兑换 ----------------
 
 def mihoyo_cookie_valid(cred: dict, timeout: int = 15):
-    """用 getUserGameRolesByCookie 判断登录态。
+    """按「签到接口」的口径检查登录态，而不是只看角色接口。
 
     True=有效 / False=失效 / None=网络或解析异常（无法判定）。
-    retcode 为 0 即有效，即使 data.list 为空（账号只是没有游戏角色）。
+
+    实测坑：getUserGameRolesByCookie 对 V2 cookie / 半过期 cookie 仍可能返回
+    retcode=0，但 luna/info、luna/sign 会返回 -100。旧版只查角色接口，于是
+    手动点续期时误判「登录态正常」，真正需要续期时被挡住。
+    这里先拿角色，再用其中一个已配置游戏的 luna/info 复核；两者都通过才算有效。
     """
+    cookie = normalize_cookie(cred.get("cookie", ""))
+    base_headers = {
+        "Cookie": cookie,
+        "DS": gen_ds(),
+        "x-rpc-app_version": APP_VERSION,
+        "x-rpc-client_type": "5",
+        "x-rpc-device_id": cred.get("device_id") or "checkin-engine-device",
+        "x-rpc-signgame": "hk4e",
+        "Origin": "https://act.mihoyo.com",
+        "Referer": "https://act.mihoyo.com/",
+    }
     try:
-        r = get_session().get(
-            ROLES_URL,
-            headers={
-                "Cookie": normalize_cookie(cred.get("cookie", "")),
-                "DS": gen_ds(),
-                "x-rpc-app_version": APP_VERSION,
-                "x-rpc-client_type": "5",
-                "x-rpc-device_id": cred.get("device_id") or "checkin-engine-device",
-                "x-rpc-signgame": "hk4e",
-                "Origin": "https://act.mihoyo.com",
-                "Referer": "https://act.mihoyo.com/",
-            },
-            timeout=timeout,
-        )
-        return r.json().get("retcode") == 0
+        r = get_session().get(ROLES_URL, headers=base_headers, timeout=timeout)
+        d = r.json()
     except Exception:  # noqa: BLE001
         return None
+    code = d.get("retcode")
+    if code == -100:
+        return False
+    if code != 0:
+        return None
+    roles = ((d.get("data") or {}).get("list") or [])
+    if not roles:
+        return True   # 账号没角色不是登录态问题
+
+    for role in roles:
+        cfg = GAMES.get(role.get("game_biz", ""))
+        if not cfg:
+            continue
+        headers = dict(base_headers)
+        headers["x-rpc-signgame"] = cfg["signgame"]
+        headers["DS"] = gen_ds()
+        try:
+            rr = get_session().get(
+                cfg["api"] + cfg["path"] + "/info",
+                params={
+                    "lang": "zh-cn", "act_id": cfg["act_id"],
+                    "region": role.get("region"), "uid": role.get("game_uid"),
+                },
+                headers=headers, timeout=timeout,
+            )
+            dd = rr.json()
+        except Exception:  # noqa: BLE001
+            return None
+        rc = dd.get("retcode")
+        if rc == -100:
+            return False
+        if rc in (0, -5003):   # 0=未签 / -5003=今日已签，都说明登录态有效
+            return True
+        return None
+    return True   # 有角色但都不在签到表里：角色接口已通过，无法再复核
 
 
 def _ds_x4(query: str) -> str:
@@ -285,8 +323,15 @@ def is_auth_failure(platform: str, message: str) -> bool:
     return False
 
 
-def renew(account, store=None, user_id: str = "local") -> tuple[bool, str]:
-    """确认凭证失效后调用：自动续期并回写。返回 (是否成功, 说明)。"""
+def renew(account, store=None, user_id: str = "local",
+          force: bool = False) -> tuple[bool, str]:
+    """确认凭证失效后调用：自动续期并回写。返回 (是否成功, 说明)。
+
+    force=True 用于「签到接口已经明确判定登录态失效」的路径：此时不再做
+    二次健康检查。实测 bind/luna-info 的检查口径可能比 luna/sign 宽松，
+    用它当门闸会把真正需要续期的账号挡在门外。
+    手动点续期（force=False）仍先检查，避免把还能用的 cookie_token 换掉。
+    """
     platform = getattr(account, "platform", "")
 
     if platform == "kuro":
@@ -307,14 +352,16 @@ def renew(account, store=None, user_id: str = "local") -> tuple[bool, str]:
         cred = enrich_mihoyo(dict(account.credential or {}))
         if not cred.get("stoken"):
             return False, (
-                "缺少 stoken，无法自动续期；请点「登录获取」重新登录一次，"
-                "程序会保存 stoken 并启用长期自动续期"
+                "缺少 stoken，无法自动续期（这是 cookie 隔几天就失效、需要重登的根因）；"
+                "请点「登录获取」用米游社账号扫码登录一次，程序会保存 stoken，"
+                "以后 cookie 过期自动兑换，不用再反复扫码"
             )
 
-        # 二次确认：避免「账号下确实没有游戏角色」被误判为凭证失效而白白兑换
-        valid = mihoyo_cookie_valid(cred)
-        if valid is True:
-            return False, "登录态检查正常，签到失败不是凭证问题"
+        # 手动续期才做二次确认；签到已判 AUTH 时直接兑换
+        if not force:
+            valid = mihoyo_cookie_valid(cred)
+            if valid is True:
+                return False, "登录态检查正常，无需续期（未消耗 stoken）"
 
         token, note = exchange_cookie_token(cred)
         if not token:

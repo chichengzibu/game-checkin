@@ -391,13 +391,14 @@ const CRED_LABEL = { mihoyo: "Cookie", kuro: "Token", yanyun: "access_token", sk
 const HELP = {
   mihoyo: {
     steps: [
-      '电脑浏览器打开 <code>miyoushe.com</code>，扫码登录（不是游戏内登录）',
+      '<b>推荐：</b>直接点上方「登录获取」用米游社 App 扫码 —— 程序会同时保存 <code>stoken</code>，以后 cookie 过期自动续期，不用反复扫码',
+      '若要用手动方式：电脑浏览器打开 <code>miyoushe.com</code>，扫码登录（不是游戏内登录）',
       '按 <code>F12</code> 打开开发者工具，切到「网络 / Network」标签',
       '刷新页面，在请求列表点任意一条 <code>api-takumi</code> 开头的请求',
-      '右侧「请求标头 / Headers」中找到 <code>Cookie:</code> 这一行',
-      '整段复制冒号后面的全部内容，粘贴到上方输入框',
+      '右侧「请求标头 / Headers」中找到 <code>Cookie:</code> 这一行，整段复制粘贴到上方输入框',
+      '<b>手动粘贴时务必带上 <code>stoken=</code></b>，否则没有自动续期能力，隔几天 cookie 过期就会签到失败',
     ],
-    warn: '必须包含 ltuid / ltoken / cookie_token（新版为 ltuid_v2 / ltoken_v2 / cookie_token_v2）。只复制一部分会提示「登录已过期」。',
+    warn: '必须包含 ltuid / ltoken / cookie_token（新版为 ltuid_v2 / ltoken_v2 / cookie_token_v2），并尽量带上 <code>stoken</code>。<b>如果账号卡片显示「未保存 stoken」，说明它无法自动续期</b> —— 隔两天没登、cookie 过期后签到就会失败；解决方法是点一次「登录获取」扫码重登（旧账号无法凭 ltoken 反推 stoken）。',
   },
   kuro: {
     steps: [

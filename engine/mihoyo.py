@@ -134,11 +134,14 @@ class MihoyoAdapter(CheckinAdapter):
             "Referer": "https://act.mihoyo.com/",
         }
 
-    def _fetch_roles(self) -> list[dict]:
-        """一次取回该账号下全部游戏的角色（不传 game_biz = 自动发现）。
+    def _fetch_roles_ex(self) -> tuple[list[dict], str]:
+        """取回全部角色 + 失败原因。
 
-        实机确认：GET getUserGameRolesByCookie 不带 game_biz 时返回所有游戏角色，
-        因此新游戏上线后无需改代码即可被识别（只是 act_id 需要配置）。
+        reason: ""=成功 / "auth"=登录态失效 / "failed"=其他 retcode /
+                "transient"=网络异常。
+
+        必须区分「Cookie 失效」和「账号下确实没有角色」：旧版把两者混成一条
+        AUTH 消息，导致没有角色的账号每次签到都白跑一次 stoken 兑换。
         """
         try:
             r = self.session.get(
@@ -147,11 +150,18 @@ class MihoyoAdapter(CheckinAdapter):
                 timeout=20,
             )
             data = r.json()
-            if data.get("retcode") == RC_OK:
-                return data.get("data", {}).get("list", []) or []
         except Exception:
-            pass
-        return []
+            return [], "transient"
+        code = data.get("retcode")
+        if code == RC_OK:
+            return data.get("data", {}).get("list", []) or [], ""
+        if code == RC_NOT_LOGIN:
+            return [], "auth"
+        return [], "failed"
+
+    def _fetch_roles(self) -> list[dict]:
+        """兼容旧调用方（角色检测 / 诊断脚本）的只返回列表版本。"""
+        return self._fetch_roles_ex()[0]
 
     def _is_signed_today(self, cfg: dict, region: str, uid: str):
         """查今日是否已签；None 表示查询失败（仍尝试签到）。"""
@@ -175,13 +185,27 @@ class MihoyoAdapter(CheckinAdapter):
         return None
 
     def _do_sign(self) -> CheckinResult:
-        roles = self._fetch_roles()
-        if not roles:
+        roles, reason = self._fetch_roles_ex()
+        if reason == "auth":
             return CheckinResult(
-                platform=self.name,
-                success=False,
-                status=STATUS_AUTH,
-                message="未取到游戏角色：Cookie 已失效，或账号下确实没有米游社游戏角色",
+                platform=self.name, success=False, status=STATUS_AUTH,
+                message="Cookie 失效，需重新登录",
+            )
+        if reason == "transient":
+            return CheckinResult(
+                platform=self.name, success=False, status=STATUS_TRANSIENT,
+                message="查询游戏角色失败（网络异常），稍后重试",
+            )
+        if reason == "failed":
+            return CheckinResult(
+                platform=self.name, success=False, status=STATUS_FAILED,
+                message="查询游戏角色失败（接口返回错误），暂不续期",
+            )
+        if not roles:
+            # 账号下确实没有角色 —— 不是登录态问题，别浪费 stoken 兑换
+            return CheckinResult(
+                platform=self.name, success=False, status=STATUS_FAILED,
+                message="账号下没有可签到的米游社游戏角色",
             )
 
         details: list[str] = []

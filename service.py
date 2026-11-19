@@ -110,7 +110,8 @@ def _check_one_ex(account: Account, store: AccountStore | None = None,
                 break
 
     if status == STATUS_AUTH:
-        renewed, note = credentials.renew(account, store, user_id)
+        # 签到接口已明确判定登录态失效：强制续期，不再用宽松的角色接口复核
+        renewed, note = credentials.renew(account, store, user_id, force=True)
         if renewed:
             # 服务端单活轮换：兑换后旧 token 立即作废，稍等再重试
             time.sleep(2)

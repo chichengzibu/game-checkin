@@ -75,13 +75,23 @@
 
 **米游社（真的能自动续，登录一次可长期有效）**
 
-- 登录时程序会结构化保存 `stoken` / `stuid` / `mid` / `device_id`（`stoken` 来自登录响应体，不是普通网页 Cookie），并加密写入账号库。
+- 登录时程序会结构化保存 `stoken` / `stuid` / `mid` / `device_id`（`stoken` 来自登录响应体或 Cookie，不是普通 V1/V2 别名），并加密写入账号库。**扫码登录和内置浏览器登录都会抓取 `stoken`**。
 - 对历史账号，签到前会从已存 Cookie 串里**懒补齐**这些字段，只要当初的 Cookie 带 `stoken`，**无需重新登录**即可获得自动续期能力。
-- 正常签到路径零额外网络请求；只有当签到返回「登录态失效」信号时，才用 `getUserGameRolesByCookie` 二次确认，然后走 `getCookieAccountInfoBySToken` 兑换新的 `cookie_token`（passport 主接口 → takumi 旧接口回退），**立即回写加密库**，稍等后自动重试签到。
+- 正常签到路径零额外网络请求；当签到接口明确返回「登录态失效」时，直接走 `getCookieAccountInfoBySToken` 兑换新的 `cookie_token`（passport 主接口 → takumi 旧接口回退），**立即回写加密库**，稍等后自动重试签到。手动点续期时才做二次健康检查，且检查口径是 `luna/info`（比 `getUserGameRolesByCookie` 严格），避免「角色接口说正常、签到却 -100」时把续期挡掉，也避免把还能用的 token 白换一次。
 - 关键约束：兑换会让旧 `cookie_token` 作废（服务端单活轮换），因此按账号加串行锁、只在确认失效时兑换、成功后必须回写。
 - Web 界面账号卡片会显示「自动续期已启用 / 未保存 stoken」，也可用 `POST /api/accounts/<id>/renew` 手动检查。
 
 **存量账号的边界（如实说明）**：如果账号是旧版本保存的、Cookie 里本来就没有 `stoken`，程序无法凭空造出 stoken，也无法凭 `ltoken` 反向兑换（官方未提供可用接口，不编造）。这种情况下只需**点一次「登录获取」扫码**，程序会保存 stoken，此后长期自动续期、不再需要重复授权；也可以在「编辑账号」里把 `stoken=...` 补进 Cookie 串，程序会自动识别。存量库街区账号同理只能靠「登录获取」重新拿一次 token。
+
+**排查：「两天没登，重启程序后签到失败」**
+
+这不是程序没跑，而是该账号 **没有保存 stoken**（卡片会显示「未保存 stoken」、`renew.auto_renew=false`）。`cookie_token` 隔一两天就过期，而没有 stoken 就无法自动兑换，只能重新登录。处理步骤：
+
+1. 在首页该账号上点「登录获取」，用米游社 App 扫码登录一次；
+2. 确认卡片变成「自动续期已启用」；
+3. 之后再遇到 cookie 过期，程序会自动续期并重试，不需要再扫码。
+
+旧版内置浏览器登录只抓了 `ltuid/ltoken`，同样没存 stoken；现已补齐，新登录的账号会自动带上。
 
 **库街区（诚实说明，不能编造接口）**
 
@@ -206,9 +216,9 @@ game-checkin/
 python tools/selftest_engine.py       # 米游社常量 / V2→V1 别名
 python tools/selftest_store.py        # 加密 / 隔离 / action 协议
 python tools/selftest_discovery.py    # 游戏自动发现
-python tools/test_credential_refresh.py  # 自动续期（纯 mock，不联网、不碰真实账号库）
+python tools/test_credential_refresh.py  # 自动续期 / stoken 抓取 / 签到型健康检查（31 项，纯离线）
 python tools/test_stage_a.py          # 结果分类 / 重试 / 幂等补跑 / 失效禁用（33 项，纯离线）
-python tools/test_skland.py           # 森空岛：加密向量/签名/dId/认证链/逐项签到（21 项，纯离线）
+python tools/test_skland.py           # 森空岛：加密向量/签名/dId/认证链/逐项签到（37 项，纯离线）
 python tools/test_web.py              # Web API
 ```
 
