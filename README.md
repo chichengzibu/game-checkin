@@ -118,8 +118,14 @@
   首页另有「仅补跑未成功账号」按钮。
 - **自动停用**：连续 2 次确定性失败才把账号置为停用，避免库街区 token 过期后每天空打接口；
   网络抖动不计入，结果文案会给出明确的重新启用提示（重新登录后手动启用即可）。
-- **调度器**：`logs/scheduler_state.txt` 记录 `日期|当天轮数|上次时间戳`，两轮至少间隔 30 分钟、
-  每天最多 6 轮，触发时间带 0~180 秒抖动。`--once` 配合系统 cron，`--once --force` 可强制全跑。
+- **内置定时签到**：桌面程序启动后自带调度线程，时间可在首页「⏰ 每日自动签到」里直接改并保存，写入
+  `config/settings.json`；默认 09:00。`logs/scheduler_state.txt` 记录 `日期|当天轮数|上次时间戳`，
+  两轮至少间隔 30 分钟、每天最多 6 轮，触发带 0~180 秒抖动。内置线程与 `local/scheduler.py` 共用设置与状态，
+  不会各跑一套；也可以 `--once` 配合系统 cron，`--once --force` 强制全跑。
+- **添加账号即检测今日状态**：添加/登录成功后自动只读查询「今天是否已签」，只调用 `luna/info`，不会顺手签到。
+  米游社支持完整检测；库街区/森空岛没有只读状态接口，会明确提示不支持，而不是假装检测过。
+- **统一账号锁**：签到、续期、重新登录写凭据共用同一把按账号可重入锁（米游社按 UID 归一），
+  避免并发兑换把对方的 token 作废，也避免登录写入与签到读到半更新状态。
 - **兼容**：`CheckinResult.status/items` 与 `Account.last_ok_date/fail_streak` 全部带默认值，
   旧账号库、旧适配器构造方式都能正常读取，不需要重新登录。
 
@@ -138,7 +144,8 @@ python web/server.py                 # http://127.0.0.1:8899
 python local/client.py add --platform mihoyo --label 原神大号 --cookie "ltuid=...; ltoken=..."
 python local/client.py list
 python local/client.py checkin
-python local/scheduler.py --hour 9 --minute 0    # 每天 9 点常驻
+python local/scheduler.py              # 常驻，读取 config/settings.json 里的时间
+python local/scheduler.py --hour 8 --minute 30   # 临时覆盖并写回设置
 ```
 
 ## 打包为 exe（Windows）
@@ -175,7 +182,7 @@ python prepare_release.py            # 生成 release/ 白名单目录 + 敏感�
 
 | 平台 | 字段 | 方式 |
 |---|---|---|
-| 米游社 | `cookie` | **推荐点「登录获取」扫码**（自动保存 stoken 启用续期）；或浏览器登录米游社后复制完整 Cookie（需含 `stoken`/`ltoken`/`ltuid`/`cookie_token`） |
+| 米游社 | `cookie` | **推荐点「登录获取」扫码**：走米游社 App 的 passport 扫码通道（`x-rpc-game_biz=bbs_cn`），确认后直接拿到 stoken，再换 ltoken/cookie_token 并启用续期。游戏 SDK 二维码会跳到具体游戏（如崩坏学园2）、web 扫码接口已不下发 stoken，故都不作为首选。也可手动粘贴完整 Cookie（需含 `stoken`/`ltoken`/`ltuid`/`cookie_token`） |
 | 库街区 | `token` | **推荐点「登录获取」**（官方登录页 + 手机号验证码，程序自动保存 `source=h5`）；或 App 抓包取请求头 `token` |
 | 燕云十六声 | — | **签到未实现**。「小程序链接」/「登录获取」仅用于唤起微信小程序辅助抓包：支持 `weixin://dl/business/?appid=…` 直达、`#小程序://` 私有短链复制到剪贴板 + 打开微信、自动扫描微信缓存发现 appid、桌面快捷方式兜底。微信客户端动态检测，兼容 `Weixin.exe` / `WeChat.exe` |
 
@@ -192,7 +199,8 @@ game-checkin/
 │   └── ...
 ├── store/             # 账号存储层
 │   ├── local_store.py # 加密库 + 主密钥持久化 + 打包路径处理
-│   ├── credentials.py # 凭证健康检查 / 自动续期 / 回写
+│   ├── credentials.py # 凭证健康检查 / 自动续期 / 回写 / 统一账号锁
+│   ├── schedule.py    # 定时设置与调度状态（Web 内置调度与 CLI 共用）
 │   └── login_mihoyo.py / login_browser.py
 ├── service.py         # 批量签到（结果分类 / 分类重试 / 幂等补跑 / 失效禁用）
 ├── web/               # 本地 Web 界面（标准库 HTTP 服务）
@@ -216,7 +224,7 @@ game-checkin/
 python tools/selftest_engine.py       # 米游社常量 / V2→V1 别名
 python tools/selftest_store.py        # 加密 / 隔离 / action 协议
 python tools/selftest_discovery.py    # 游戏自动发现
-python tools/test_credential_refresh.py  # 自动续期 / stoken 抓取 / 签到型健康检查（31 项，纯离线）
+python tools/test_credential_refresh.py  # 自动续期 / 扫码换 stoken / 统一锁 / 定时设置（46 项，纯离线）
 python tools/test_stage_a.py          # 结果分类 / 重试 / 幂等补跑 / 失效禁用（33 项，纯离线）
 python tools/test_skland.py           # 森空岛：加密向量/签名/dId/认证链/逐项签到（37 项，纯离线）
 python tools/test_web.py              # Web API

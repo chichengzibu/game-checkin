@@ -2,6 +2,7 @@
 config/vault.json
 config/master.key
 config/games.json
+config/settings.json
 logs/
 *.log
 *.key

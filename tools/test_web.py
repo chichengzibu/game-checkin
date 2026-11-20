@@ -73,6 +73,9 @@ def test_api():
     env = dict(os.environ)
     env["CHECKIN_MASTER_KEY"] = "web-test-key"
     env["CHECKIN_VAULT_PATH"] = vault
+    env["CHECKIN_DISABLE_SCHEDULER"] = "1"   # 测试不跑内置定时，避免真实网络请求
+    env["CHECKIN_SETTINGS_PATH"] = os.path.join(tmpdir, "settings.json")
+    env["CHECKIN_SCHEDULE_STATE"] = os.path.join(tmpdir, "scheduler_state.txt")
 
     # 让 server 用临时 vault：通过环境变量注入（server 里已支持）
     proc = subprocess.Popen(
@@ -105,6 +108,21 @@ def test_api():
         # 初始列表为空
         code, d = http("GET", base + "/api/accounts")
         check("GET 账号列表(初始为空)", code == 200 and d["accounts"] == [])
+
+        # 定时设置：默认值 / 保存 / 回读
+        code, d = http("GET", base + "/api/settings")
+        check("GET 定时设置", code == 200 and d["settings"]["schedule_time"] == "09:00")
+        code, d = http("POST", base + "/api/settings",
+                       {"schedule_time": "08:30", "schedule_enabled": False})
+        check("POST 保存定时设置",
+              code == 200 and d["settings"]["schedule_time"] == "08:30"
+              and d["settings"]["schedule_enabled"] is False)
+        code, d = http("GET", base + "/api/settings")
+        check("定时设置持久化",
+              d["settings"]["schedule_time"] == "08:30"
+              and d["settings"]["schedule_enabled"] is False)
+        code, d = http("POST", base + "/api/settings", {"schedule_time": "99:99"})
+        check("非法时间回落到 09:00", d["settings"]["schedule_time"] == "09:00")
 
         # 新增
         code, d = http("POST", base + "/api/accounts", {

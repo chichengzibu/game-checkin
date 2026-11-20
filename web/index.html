@@ -289,6 +289,17 @@
     <button class="btn" id="btn-refresh">↻ 刷新</button>
   </div>
 
+  <div class="actions" style="margin-top:-10px;align-items:center;font-size:13px;color:var(--text-2)">
+    <span>⏰ 每日自动签到</span>
+    <input type="time" id="sched-time" value="09:00"
+           style="padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--text)">
+    <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+      <input type="checkbox" id="sched-enabled" checked> 启用
+    </label>
+    <button class="btn" id="btn-sched-save">保存</button>
+    <span id="sched-hint"></span>
+  </div>
+
   <div class="progress-box" id="progress">
     <div class="progress-head">
       <span id="prog-label">正在签到…</span>
@@ -892,13 +903,21 @@ async function startBrowserLogin(platform) {
 /** 登录成功统一收尾 */
 function onLoginSuccess(r) {
   stopLoginPoll();
-  $("qr-status").textContent = "✅ 登录成功，账号已自动添加";
-  $("qr-status").className = "qr-status ok";
-  $("browser-status").textContent = "✅ 登录成功，账号已自动添加";
-  $("browser-status").className = "qr-status ok";
-  $("btn-login-start").textContent = "✅ 已登录";
-  toast(`账号已添加：${r.label || "新账号"}`, "ok");
-  setTimeout(async () => { closeModal(); await load(); }, 900);
+  const isMihoyo = r.platform === "mihoyo";
+  const noStoken = isMihoyo && r.auto_renew === false;
+  const msg = noStoken
+    ? "⚠️ 登录成功，但这次没抓到 stoken（自动续期仍未启用）"
+    : "✅ 登录成功，账号已自动添加";
+  $("qr-status").textContent = msg;
+  $("qr-status").className = noStoken ? "qr-status err" : "qr-status ok";
+  $("browser-status").textContent = msg;
+  $("browser-status").className = noStoken ? "qr-status err" : "qr-status ok";
+  $("btn-login-start").textContent = noStoken ? "⚠️ 未抓到 stoken" : "✅ 已登录";
+  toast(noStoken
+    ? "请在手机端完成确认后再试；若仍无 stoken，请在米游社 App 里退出后重新扫码"
+    : `账号已添加：${r.label || "新账号"}`, noStoken ? "err" : "ok");
+  if (r.account_id) refreshToday(r.account_id);
+  setTimeout(async () => { closeModal(); await load(); }, noStoken ? 1800 : 900);
 }
 
 function openManual() {
@@ -956,6 +975,75 @@ function closeModal() {
   $("help-box").classList.remove("open");
 }
 
+function showToday(today) {
+  if (!today) return;
+  if (!today.supported) {
+    if (today.note) toast(today.note);
+    return;
+  }
+  if (!today.ok) {
+    toast(`今日状态检测失败：${today.error || "未知原因"}`, "err");
+    return;
+  }
+  const total = today.total || 0;
+  const signed = today.signed_count || 0;
+  const unknown = today.unknown_count || 0;
+  if (!total) {
+    if (today.note) toast(today.note);
+    return;
+  }
+  if (unknown && !signed) {
+    toast(`今日状态未取到（${unknown} 个游戏查询失败），可稍后点签到确认`, "err");
+    return;
+  }
+  toast(today.all_signed
+    ? `今日已全部签到（${signed}/${total}）`
+    : `今日已签 ${signed}/${total}，未签的会纳入签到`, today.all_signed ? "ok" : "");
+}
+
+async function refreshToday(id) {
+  try {
+    const d = await api(`/api/accounts/${id}/today`);
+    showToday(d);
+  } catch (e) {
+    toast(`今日状态检测失败：${e.message}`, "err");
+  }
+}
+
+async function loadSettings() {
+  try {
+    const d = await api("/api/settings");
+    const s = d.settings || {};
+    $("sched-time").value = s.schedule_time || "09:00";
+    $("sched-enabled").checked = s.schedule_enabled !== false;
+    $("sched-hint").textContent = s.schedule_enabled ? "已启用" : "已关闭";
+  } catch (e) {
+    $("sched-hint").textContent = "读取失败";
+  }
+}
+
+async function saveSettings() {
+  try {
+    const d = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        schedule_time: $("sched-time").value || "09:00",
+        schedule_enabled: $("sched-enabled").checked,
+      }),
+    });
+    const s = d.settings || {};
+    $("sched-time").value = s.schedule_time;
+    $("sched-enabled").checked = s.schedule_enabled !== false;
+    $("sched-hint").textContent = s.schedule_enabled
+      ? `已保存：每天 ${s.schedule_time}` : "已保存：自动签到关闭";
+    toast("签到时间已保存", "ok");
+    return true;
+  } catch (e) {
+    toast(e.message, "err");
+    return false;
+  }
+}
+
 async function saveAccount() {
   const platform = $("f-platform").value;
   const label = $("f-label").value.trim();
@@ -975,11 +1063,13 @@ async function saveAccount() {
       await api(`/api/accounts/${editingId}`, { method: "PUT", body: JSON.stringify(payload) });
       toast("已保存", "ok");
     } else {
-      await api("/api/accounts", {
+      const r = await api("/api/accounts", {
         method: "POST",
         body: JSON.stringify({ platform, label, credential: { [key]: credVal } }),
       });
       toast("已添加", "ok");
+      // 添加即检测今日是否已签到（只读，不会顺手签到）
+      if (r.id) refreshToday(r.id);
     }
     closeModal();
     await load();
@@ -1021,6 +1111,7 @@ function bindEvents() {
 
   $("btn-add").addEventListener("click", () => openModal(null));
   $("btn-refresh").addEventListener("click", () => { load(); toast("已刷新"); });
+  $("btn-sched-save").addEventListener("click", saveSettings);
 
   $("btn-cancel").addEventListener("click", closeModal);
   $("btn-save").addEventListener("click", saveAccount);
@@ -1100,6 +1191,7 @@ async function detectGames(id, btn) {
 document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   load();
+  loadSettings();
 });
 </script>
 </body>

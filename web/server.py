@@ -25,10 +25,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -41,9 +43,10 @@ from engine import (                             # noqa: E402
     unimplemented_hint, beta_hint,
 )
 from store import credentials, get_store         # noqa: E402
+from store import schedule                       # noqa: E402
 from store.base import Account                   # noqa: E402
 from store.login_mihoyo import (                 # noqa: E402
-    LoginError, MihoyoQRLogin,
+    LoginError, MihoyoQRLogin, MihoyoSDKQRLogin,
 )
 from store.login_browser import (                # noqa: E402
     PLATFORMS as BROWSER_PLATFORMS, BrowserLoginSession,
@@ -201,6 +204,49 @@ def _run_task(task_id: str, only_id: str | None,
         TASKS[task_id]["finished"] = True
 
 
+# ---------------- 内置定时调度（与 CLI 共用设置与状态） ----------------
+
+_SCHEDULER_STARTED = False
+
+
+def _scheduler_loop() -> None:
+    while True:
+        try:
+            cfg = schedule.load_settings()
+            if not cfg.get("schedule_enabled"):
+                time.sleep(30)
+                continue
+            pending = [a for a in store().list_accounts(LOCAL_USER)
+                       if service.is_pending(a)]
+            if not pending:
+                time.sleep(30)
+                continue
+            if schedule.is_due(settings=cfg):
+                date, count, _ts = schedule.read_state()
+                if date != schedule.today_str():
+                    count = 0
+                # 先写状态，避免本轮执行较慢时被下一次轮询重复触发
+                schedule.write_state(schedule.today_str(), count + 1, time.time())
+                jitter = random.uniform(
+                    0, int(cfg.get("schedule_jitter_seconds") or 0))
+                if jitter:
+                    time.sleep(jitter)
+                print(f"[调度] {datetime.now():%H:%M:%S} 触发自动签到，"
+                      f"待跑 {len(pending)} 个账号")
+                service.run_user(LOCAL_USER, store(), only_pending=True)
+        except Exception as e:  # noqa: BLE001  调度失败不拖垮 Web 服务
+            print(f"[调度] 本轮异常: {e}")
+        time.sleep(30)
+
+
+def start_scheduler() -> None:
+    global _SCHEDULER_STARTED
+    if _SCHEDULER_STARTED or os.environ.get("CHECKIN_DISABLE_SCHEDULER") == "1":
+        return
+    _SCHEDULER_STARTED = True
+    threading.Thread(target=_scheduler_loop, daemon=True).start()
+
+
 # ---------------- HTTP 处理 ----------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -256,6 +302,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/accounts":
             accs = [acct_public(a) for a in store().list_accounts(LOCAL_USER)]
             return self._json(200, {"ok": True, "accounts": accs})
+        if path == "/api/settings":
+            return self._json(200, {"ok": True, "settings": schedule.load_settings()})
         if path == "/api/checkin/status":
             tid = (qs.get("task_id") or [""])[0]
             with TASKS_LOCK:
@@ -268,6 +316,15 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/accounts/") and path.endswith("/detect"):
             aid = path[len("/api/accounts/"):-len("/detect")]
             return self._json(200, detect_account(LOCAL_USER, aid))
+        # /api/accounts/<id>/today —— 只读检测今天是否已签到
+        if path.startswith("/api/accounts/") and path.endswith("/today"):
+            aid = path[len("/api/accounts/"):-len("/today")]
+            st = store()
+            for a in st.list_accounts(LOCAL_USER):
+                if a.id == aid:
+                    return self._json(200, service.check_today(
+                        a, st, LOCAL_USER))
+            return self._json(404, {"ok": False, "error": "账号不存在"})
         # 静态资源
         name = path.lstrip("/")
         if name and "/" not in name and ".." not in name:
@@ -278,6 +335,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/settings":
+            data = self._body()
+            try:
+                cfg = schedule.save_settings(data)
+            except Exception as e:  # noqa: BLE001
+                return self._json(400, {"ok": False, "error": f"保存失败: {e}"})
+            return self._json(200, {"ok": True, "settings": cfg})
         if path == "/api/accounts":
             data = self._body()
             platform = (data.get("platform") or "").strip()
@@ -297,6 +361,8 @@ class Handler(BaseHTTPRequestHandler):
                 enabled=bool(data.get("enabled", True)),
             )
             store().add_account(LOCAL_USER, acc)
+            # 今日状态由前端在添加后异步调用 /today 检测：
+            # POST 保持快速，不让一次角色/签到状态查询拖慢添加。
             resp = {"ok": True, "id": acc.id}
             if not is_implemented(platform):
                 resp["warning"] = unimplemented_hint(platform)
@@ -359,7 +425,10 @@ class Handler(BaseHTTPRequestHandler):
                     "unsupported": True,
                 })
             try:
-                sess = MihoyoQRLogin()
+                # 只走能拿到 stoken 的米游社 App 扫码通道。
+                # 不再静默降级到 web 通道：那条通道现网 tokens 为空，
+                # 用户会登进一个没有自动续期能力的账号，等于重演原问题。
+                sess = MihoyoSDKQRLogin()
                 qr = sess.create()
                 sid = uuid.uuid4().hex[:12]
                 with LOGIN_LOCK:
@@ -369,6 +438,8 @@ class Handler(BaseHTTPRequestHandler):
                     "session_id": sid,
                     "ticket": qr["ticket"],
                     "qr_url": qr["url"],
+                    "login_flow": ("sdk" if isinstance(sess, MihoyoSDKQRLogin)
+                                   else "web"),
                 })
             except LoginError as e:
                 return self._json(502, {"ok": False, "error": str(e)})
@@ -394,20 +465,50 @@ class Handler(BaseHTTPRequestHandler):
                     "device_id": sess.device_id,
                     **(st.get("renewal") or {}),
                 })
-                acc = Account(
-                    platform="mihoyo",
-                    label=data.get("label") or f"米游社 {st.get('nickname') or st.get('uid') or ''}".strip(),
-                    credential=cred,
-                    enabled=True,
-                )
-                store().add_account(LOCAL_USER, acc)
+                uid_val = str(st.get("uid") or cred.get("account_id") or "")
+                # 与签到/续期共用同一把账号锁：登录写凭据时，后台签到不会
+                # 读到半更新状态，也不会同时兑换 token。
+                with credentials.account_lock(credentials.lock_key(
+                        "mihoyo", cred, "")):
+                    # 重新扫码是为了补齐 stoken，不能因此多出一个重复账号：
+                    # 同平台同 UID 已存在时原地更新凭据，保留原标签与启用状态。
+                    existing = None
+                    for old in store().list_accounts(LOCAL_USER):
+                        if old.platform != "mihoyo":
+                            continue
+                        old_uid = str((old.credential or {}).get("account_id")
+                                      or (old.credential or {}).get("stuid") or "")
+                        if uid_val and old_uid and old_uid == uid_val:
+                            existing = old
+                            break
+                    acc = Account(
+                        platform="mihoyo",
+                        label=(existing.label if existing else None)
+                              or data.get("label")
+                              or f"米游社 {st.get('nickname') or st.get('uid') or ''}".strip(),
+                        credential=cred,
+                        enabled=existing.enabled if existing else True,
+                        id=existing.id if existing else None,
+                        last_ok_date=existing.last_ok_date if existing else None,
+                        fail_streak=existing.fail_streak if existing else 0,
+                        last_run=existing.last_run if existing else None,
+                        last_result=existing.last_result if existing else None,
+                    )
+                    if not acc.id:
+                        acc.id = uuid.uuid4().hex
+                    if existing:
+                        store().update_account(LOCAL_USER, acc)
+                    else:
+                        store().add_account(LOCAL_USER, acc)
                 with LOGIN_LOCK:
                     LOGIN_SESSIONS.pop(sid, None)
                 return self._json(200, {
                     "ok": True, "status": status, "account_id": acc.id,
+                    "platform": "mihoyo",
                     "label": acc.label,
                     "nickname": st.get("nickname"), "uid": st.get("uid"),
                     "auto_renew": bool(cred.get("stoken")),
+                    "reused_account": bool(existing),
                 })
 
             if status in ("Expired", "Cancelled", "Error"):
@@ -490,6 +591,7 @@ class Handler(BaseHTTPRequestHandler):
                     BROWSER_SESSIONS.pop(sid, None)
                 return self._json(200, {
                     "ok": True, "status": "Confirmed",
+                    "platform": sess.platform,
                     "account_id": acc.id, "label": acc.label,
                     "source": st.get("source"),
                     "auto_renew": bool(cred.get("stoken")),
@@ -619,6 +721,7 @@ def main() -> None:
     from store.local_store import resolve_master_key  # noqa: WPS433
     resolve_master_key()  # 首次运行即生成并持久化，保证重启后不用重新登录
 
+    start_scheduler()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}"
     print("=" * 56)

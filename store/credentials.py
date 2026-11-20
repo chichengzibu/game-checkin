@@ -32,7 +32,9 @@ import uuid
 from datetime import datetime
 
 from engine.base import get_session
-from engine.mihoyo import APP_VERSION, GAMES, ROLES_URL, gen_ds, normalize_cookie
+from engine.mihoyo import (
+    APP_VERSION, GAMES, ROLES_URL, RC_AUTH_CODES, gen_ds, normalize_cookie,
+)
 
 PASSPORT_STOKEN_URL = (
     "https://passport-api.mihoyo.com/account/auth/api/getCookieAccountInfoBySToken"
@@ -43,12 +45,14 @@ TAKUMI_STOKEN_URL = (
 PASSPORT_X4_SALT = "xV8v4Qu54lUKrEYFZkJhB8cuOh9Asafs"
 DEVICE_FP = "38d814469b1e4"
 
-# 按账号串行化，避免并发签到重复兑换（重复兑换会互相把对方的新 token 作废）
-_LOCKS: dict[str, threading.Lock] = {}
+# 按账号串行化：签到、续期、重新登录共用同一把可重入锁，
+# 避免并发兑换把对方的新 token 作废，也避免登录写入与签到读到半更新状态。
+_LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 _MI_FAIL_SIGNALS = (
-    "cookie 失效", "未取到游戏角色", "请登录", "-100", "登录已过期", "登录态失效",
+    "cookie 失效", "未取到游戏角色", "请登录", "-100", "-111", "10001",
+    "登录已过期", "登录态失效",
 )
 _KURO_FAIL_SIGNALS = (
     "token 无效", "已过期", "请重新登录", "登录已过期", "code=220", "令牌",
@@ -59,11 +63,26 @@ _SKLAND_FAIL_SIGNALS = (
 )
 
 
-def _lock_for(account_id: str) -> threading.Lock:
+def lock_key(platform: str, credential: dict | None,
+             account_id: str = "") -> str:
+    """稳定身份键：米游社优先用账号 UID，保证「重新登录」与「旧账号签到」
+    拿到同一把锁；其他平台退回账号 id。"""
+    if platform == "mihoyo":
+        d = parse_cookie((credential or {}).get("cookie", ""))
+        uid = ((credential or {}).get("account_id")
+               or (credential or {}).get("stuid")
+               or d.get("account_id") or d.get("account_id_v2")
+               or d.get("ltuid") or d.get("ltuid_v2"))
+        if uid:
+            return f"mihoyo:{uid}"
+    return f"account:{account_id or 'unknown'}"
+
+
+def account_lock(key: str) -> threading.RLock:
     with _LOCKS_GUARD:
-        if account_id not in _LOCKS:
-            _LOCKS[account_id] = threading.Lock()
-        return _LOCKS[account_id]
+        if key not in _LOCKS:
+            _LOCKS[key] = threading.RLock()
+        return _LOCKS[key]
 
 
 # ---------------- Cookie 串工具 ----------------
@@ -188,7 +207,7 @@ def mihoyo_cookie_valid(cred: dict, timeout: int = 15):
     except Exception:  # noqa: BLE001
         return None
     code = d.get("retcode")
-    if code == -100:
+    if code in RC_AUTH_CODES:
         return False
     if code != 0:
         return None
@@ -216,7 +235,7 @@ def mihoyo_cookie_valid(cred: dict, timeout: int = 15):
         except Exception:  # noqa: BLE001
             return None
         rc = dd.get("retcode")
-        if rc == -100:
+        if rc in RC_AUTH_CODES:
             return False
         if rc in (0, -5003):   # 0=未签 / -5003=今日已签，都说明登录态有效
             return True
@@ -242,7 +261,11 @@ def exchange_cookie_token(cred: dict, timeout: int = 15) -> tuple[str | None, st
 
     stuid, mid = c.get("stuid", ""), c.get("mid", "")
     device_id = c.get("device_id") or str(uuid.uuid4())
-    query = f"stoken={stoken}"
+    # v2 stoken 必须带 mid 参与 query 与 DS 签名；只放 Cookie 里不够
+    query = f"stoken={stoken}&mid={mid}" if mid else f"stoken={stoken}"
+    params = {"stoken": stoken}
+    if mid:
+        params["mid"] = mid
     headers_v2 = {
         "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) miHoYoBBS/{APP_VERSION}",
         "x-rpc-app_version": APP_VERSION,
@@ -258,7 +281,7 @@ def exchange_cookie_token(cred: dict, timeout: int = 15) -> tuple[str | None, st
 
     try:
         r = get_session().get(
-            PASSPORT_STOKEN_URL, params={"stoken": stoken},
+            PASSPORT_STOKEN_URL, params=params,
             headers=headers_v2, timeout=timeout,
         )
         d = r.json()
@@ -348,7 +371,9 @@ def renew(account, store=None, user_id: str = "local",
     if platform != "mihoyo":
         return False, "该平台不支持自动续期"
 
-    with _lock_for(getattr(account, "id", "default") or "default"):
+    with account_lock(lock_key(
+            platform, account.credential or {},
+            getattr(account, "id", "") or "")):
         cred = enrich_mihoyo(dict(account.credential or {}))
         if not cred.get("stoken"):
             return False, (

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tempfile
@@ -25,6 +26,8 @@ from store import credentials  # noqa: E402
 from store.base import Account  # noqa: E402
 from store.local_store import resolve_master_key  # noqa: E402
 from store.login_browser import PLATFORMS  # noqa: E402
+from store import schedule  # noqa: E402
+from store.login_mihoyo import MihoyoQRLogin, MihoyoSDKQRLogin  # noqa: E402
 
 
 class _Resp:
@@ -142,6 +145,7 @@ class TestExchange(unittest.TestCase):
         _, kw = sess.calls[0]
         self.assertEqual(kw["params"]["stoken"],
                          "v2_FAKE_STOKEN_FOR_TEST_ONLY_0000000000")
+        self.assertEqual(kw["params"]["mid"], "FAKE_MID")
         self.assertIn("ds", kw["headers"])
 
     def test_fallback_to_takumi(self):
@@ -265,6 +269,96 @@ class TestHealthCheckUsesSign口径(unittest.TestCase):
                 {"cookie": FAKE_COOKIE}), True)
 
 
+class TestQRLoginStokenExtraction(unittest.TestCase):
+    """扫码响应的 stoken 形状会变，登录成功但没续期材料是最隐蔽的坑。"""
+
+    def _poll(self, data):
+        sess = MihoyoQRLogin()
+        with mock.patch("store.login_mihoyo._post", return_value=(
+                0, {"retcode": 0, "data": data}, [])):
+            return sess.poll("FAKE_TICKET")
+
+    def _base(self, **kw):
+        d = {
+            "status": "Confirmed",
+            "user_info": {"aid": "12345678", "mid": "FAKE_MID"},
+            "tokens": [{"name": "ltoken", "token": "FAKE_LT"}],
+        }
+        d.update(kw)
+        return d
+
+    def test_tokens_list_shape(self):
+        st = self._poll(self._base(tokens=[
+            {"name": "stoken", "token": "v2_FROM_TOKENS"},
+            {"name": "ltoken", "token": "FAKE_LT"},
+        ]))
+        self.assertEqual(st["renewal"]["stoken"], "v2_FROM_TOKENS")
+        self.assertIn("stoken=v2_FROM_TOKENS", st["cookie"])
+
+    def test_data_token_as_string(self):
+        st = self._poll(self._base(tokens=None, token="v2_FROM_TOKEN_STR"))
+        self.assertEqual(st["renewal"]["stoken"], "v2_FROM_TOKEN_STR")
+
+    def test_data_stoken_direct(self):
+        st = self._poll(self._base(tokens=None, stoken="v2_DIRECT"))
+        self.assertEqual(st["renewal"]["stoken"], "v2_DIRECT")
+
+    def test_missing_stoken_is_reported(self):
+        st = self._poll(self._base(tokens=None))
+        self.assertNotIn("stoken", st["renewal"])
+
+    def test_ltoken_is_not_mistaken_for_stoken(self):
+        st = self._poll(self._base(tokens=[{"name": "ltoken", "token": "LT"}]))
+        self.assertNotIn("stoken", st["renewal"])
+        self.assertIn("ltoken=LT", st["cookie"])
+
+
+class TestSDKQRLogin(unittest.TestCase):
+    """米游社 App 扫码（bbs_cn）必须在 Confirmed 响应里拿到 stoken。"""
+
+    def test_app_qr_exchange_yields_stoken_and_full_cookie(self):
+        sess = MihoyoSDKQRLogin()
+
+        def fake_post(url, body, headers=None):
+            if "queryQRLoginStatus" in url:
+                return {"retcode": 0, "data": {
+                    "status": "Confirmed",
+                    "tokens": [{"name": "stoken", "token": "v2_APP_STOKEN"}],
+                    "user_info": {"mid": "FAKE_MID", "aid": "12345678"},
+                }}
+            raise AssertionError(f"非预期请求 {url}")
+
+        with mock.patch("store.login_mihoyo._sdk_post", side_effect=fake_post), \
+             mock.patch("store.login_mihoyo._app_get", return_value={
+                 "retcode": 0, "data": {"ltoken": "FAKE_LTOKEN"}}), \
+             mock.patch("store.credentials.exchange_cookie_token",
+                        return_value=("FAKE_CT", "ok")):
+            st = sess.poll("FAKE_TICKET")
+        self.assertEqual(st["status"], "Confirmed")
+        self.assertEqual(st["renewal"]["stoken"], "v2_APP_STOKEN")
+        self.assertEqual(st["renewal"]["mid"], "FAKE_MID")
+        self.assertIn("stoken=v2_APP_STOKEN", st["cookie"])
+        self.assertIn("ltoken=FAKE_LTOKEN", st["cookie"])
+        self.assertIn("cookie_token=FAKE_CT", st["cookie"])
+
+    def test_qr_create_uses_bbs_app_channel(self):
+        sess = MihoyoSDKQRLogin()
+        with mock.patch("store.login_mihoyo._sdk_post", return_value={
+                "retcode": 0, "data": {"url": "https://user.mihoyo.com/x",
+                                       "ticket": "T"}}) as post:
+            qr = sess.create()
+        self.assertEqual(qr["ticket"], "T")
+        self.assertIn("createQRLogin", post.call_args.args[0])
+        headers = post.call_args.args[2]
+        self.assertEqual(headers["x-rpc-game_biz"], "bbs_cn")
+
+    def test_waiting_state(self):
+        sess = MihoyoSDKQRLogin()
+        with mock.patch("store.login_mihoyo._sdk_post", return_value={
+                "retcode": 0, "data": {"status": "Init"}}):
+            self.assertEqual(sess.poll("T")["status"], "Created")
+
+
 class TestForceRenew(unittest.TestCase):
     def _acc(self):
         return Account(platform="mihoyo", label="测试",
@@ -386,6 +480,70 @@ class TestServiceWiring(unittest.TestCase):
         self.assertTrue(ok, msg)
         self.assertIn("自动续期", msg)
         self.assertEqual(calls["n"], 2)
+
+
+class TestTodayDetection(unittest.TestCase):
+    def test_unsupported_platform_is_explicit(self):
+        acc = Account(platform="kuro", label="测试", credential={"token": "x"})
+        r = service.check_today(acc)
+        self.assertFalse(r["supported"])
+        self.assertIn("不提供只读", r["note"])
+
+
+class TestUnifiedAccountLock(unittest.TestCase):
+    def test_same_mihoyo_uid_shares_lock_even_if_account_id_changes(self):
+        a = credentials.lock_key("mihoyo", {"stuid": "12345678"}, "old-id")
+        b = credentials.lock_key("mihoyo", {"account_id": "12345678"}, "new-id")
+        self.assertEqual(a, b)
+        self.assertEqual(a, "mihoyo:12345678")
+
+    def test_lock_is_reentrant_for_renew_inside_checkin(self):
+        key = credentials.lock_key("mihoyo", {"stuid": "12345678"})
+        with credentials.account_lock(key):
+            with credentials.account_lock(key):
+                pass   # 不阻塞 = RLock 生效
+
+    def test_other_platform_falls_back_to_account_id(self):
+        self.assertEqual(
+            credentials.lock_key("kuro", {"token": "x"}, "abc"),
+            "account:abc")
+
+
+class TestScheduleSettings(unittest.TestCase):
+    def test_save_and_load_roundtrip(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {"CHECKIN_SETTINGS_PATH": os.path.join(td, "settings.json"),
+                   "CHECKIN_SCHEDULE_STATE": os.path.join(td, "state.txt")}
+            with mock.patch.dict(os.environ, env, clear=False):
+                self.assertEqual(schedule.load_settings()["schedule_time"], "09:00")
+                cfg = schedule.save_settings(
+                    {"schedule_time": "08:30", "schedule_enabled": False})
+                self.assertEqual(cfg["schedule_time"], "08:30")
+                self.assertFalse(cfg["schedule_enabled"])
+                again = schedule.load_settings()
+                self.assertEqual(again["schedule_time"], "08:30")
+                self.assertFalse(again["schedule_enabled"])
+
+    def test_invalid_values_are_normalized(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {"CHECKIN_SETTINGS_PATH": os.path.join(td, "settings.json")}
+            with mock.patch.dict(os.environ, env, clear=False):
+                cfg = schedule.save_settings({
+                    "schedule_time": "99:99", "max_runs_per_day": 999,
+                    "min_interval_minutes": 1, "schedule_jitter_seconds": -5,
+                })
+                self.assertEqual(cfg["schedule_time"], "09:00")
+                self.assertEqual(cfg["max_runs_per_day"], 24)
+                self.assertEqual(cfg["min_interval_minutes"], 5)
+                self.assertEqual(cfg["schedule_jitter_seconds"], 0)
+
+    def test_disabled_never_due(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = {"CHECKIN_SETTINGS_PATH": os.path.join(td, "settings.json"),
+                   "CHECKIN_SCHEDULE_STATE": os.path.join(td, "state.txt")}
+            with mock.patch.dict(os.environ, env, clear=False):
+                schedule.save_settings({"schedule_enabled": False})
+                self.assertFalse(schedule.is_due())
 
 
 class TestMasterKeyPersistence(unittest.TestCase):

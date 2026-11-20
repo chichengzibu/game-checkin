@@ -31,14 +31,13 @@ sys.path.insert(0, ROOT)
 
 import service                       # noqa: E402
 from store import get_store          # noqa: E402
+from store import schedule           # noqa: E402
 
 LOCAL_USER = "local"
-# 状态格式：YYYY-MM-DD|当天已跑轮数|上次运行的 epoch 秒
-STATE_PATH = os.path.join(ROOT, "logs", "scheduler_state.txt")
+# 状态与设置与 Web 内置调度器共用：同一份 config/settings.json / logs 状态，
+# 因此「界面里改时间」和「命令行常驻」不会各跑一套。
+STATE_PATH = schedule.state_path()
 POLL_SECONDS = 300
-MIN_INTERVAL_SECONDS = 1800        # 两轮之间至少 30 分钟
-MAX_RUNS_PER_DAY = 6
-JITTER_SECONDS = 180               # 触发抖动 0~180 秒
 
 
 def today_str() -> str:
@@ -46,18 +45,11 @@ def today_str() -> str:
 
 
 def read_state() -> tuple[str, int, float]:
-    try:
-        with open(STATE_PATH, "r", encoding="utf-8") as f:
-            date, count, ts = f.read().strip().split("|", 2)
-        return date, int(count), float(ts)
-    except (OSError, ValueError):
-        return "", 0, 0.0
+    return schedule.read_state()
 
 
 def write_state(date: str, count: int, ts: float) -> None:
-    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
-        f.write(f"{date}|{count}|{ts}")
+    schedule.write_state(date, count, ts)
 
 
 def pending_accounts() -> list:
@@ -79,8 +71,10 @@ def run_once(only_pending: bool = True) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="本地定时签到")
-    p.add_argument("--hour", type=int, default=9)
-    p.add_argument("--minute", type=int, default=0)
+    p.add_argument("--hour", type=int, default=None,
+                   help="覆盖设置里的小时（默认读 config/settings.json）")
+    p.add_argument("--minute", type=int, default=None,
+                   help="覆盖设置里的分钟（默认读 config/settings.json）")
     p.add_argument("--once", action="store_true", help="立即跑一次后退出")
     p.add_argument("--force", action="store_true",
                     help="忽略按账号幂等，强制对全部启用账号签到")
@@ -90,28 +84,41 @@ def main() -> None:
         run_once(only_pending=not args.force)
         return
 
-    h, m = args.hour, args.minute
-    print(f"[调度] 目标 {h:02d}:{m:02d}，每 {POLL_SECONDS}s 检查；"
-          f"补跑间隔 ≥{MIN_INTERVAL_SECONDS // 60} 分钟，每天最多 {MAX_RUNS_PER_DAY} 轮。")
+    cfg = schedule.load_settings()
+    if args.hour is not None or args.minute is not None:
+        h = args.hour if args.hour is not None else schedule.parse_hhmm(
+            cfg["schedule_time"])[0]
+        m = args.minute if args.minute is not None else schedule.parse_hhmm(
+            cfg["schedule_time"])[1]
+        cfg = schedule.save_settings({"schedule_time": f"{h:02d}:{m:02d}"})
+    if not cfg["schedule_enabled"]:
+        print("[调度] 设置里已关闭自动签到；如需临时运行请加 --once。")
+        return
+
+    h, m = schedule.parse_hhmm(cfg["schedule_time"])
+    min_interval = int(cfg["min_interval_minutes"])
+    max_runs = int(cfg["max_runs_per_day"])
+    jitter_max = int(cfg["schedule_jitter_seconds"])
+    print(f"[调度] 目标 {h:02d}:{m:02d}（来自设置），每 {POLL_SECONDS}s 检查；"
+          f"补跑间隔 ≥{min_interval} 分钟，每天最多 {max_runs} 轮。")
     try:
         while True:
-            now = datetime.now()
-            target = now.replace(hour=h, minute=m, second=0, microsecond=0)
-            date, count, last_ts = read_state()
-            if date != today_str():
-                count = 0
-            if (now >= target
-                    and count < MAX_RUNS_PER_DAY
-                    and time.time() - last_ts >= MIN_INTERVAL_SECONDS
-                    and pending_accounts()):
+            cfg = schedule.load_settings()
+            if not cfg["schedule_enabled"]:
+                time.sleep(POLL_SECONDS)
+                continue
+            if schedule.is_due(settings=cfg) and pending_accounts():
+                date, count, last_ts = read_state()
+                if date != today_str():
+                    count = 0
                 # 先写状态，避免本轮执行较慢时被下一次轮询重复触发
                 write_state(today_str(), count + 1, time.time())
-                jitter = random.uniform(0, JITTER_SECONDS)
+                jitter = random.uniform(0, int(cfg["schedule_jitter_seconds"]))
                 if jitter:
                     print(f"[调度] 抖动等待 {jitter:.0f}s")
                     time.sleep(jitter)
-                print(f"[调度] {now:%H:%M:%S} 触发第 {count + 1} 轮，待补跑 "
-                      f"{len(pending_accounts())} 个账号")
+                print(f"[调度] {datetime.now():%H:%M:%S} 触发第 {count + 1} 轮，"
+                      f"待补跑 {len(pending_accounts())} 个账号")
                 run_once(only_pending=True)
             time.sleep(POLL_SECONDS)
     except KeyboardInterrupt:

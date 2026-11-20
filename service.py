@@ -85,47 +85,129 @@ def _check_one_ex(account: Account, store: AccountStore | None = None,
     if not is_implemented(account.platform):
         return False, unimplemented_hint(account.platform), STATUS_FAILED
 
-    notes = credentials.prepare(account, store, user_id)
-    payload = _payload(account)
+    # 统一锁：整个签到周期（含续期、重试）与「重新登录写入凭据」互斥。
+    # RLock 允许 renew 内部再次获取同一把锁。
+    with credentials.account_lock(credentials.lock_key(
+            account.platform, account.credential or {}, account.id)):
+        notes = credentials.prepare(account, store, user_id)
+        payload = _payload(account)
 
-    def attempt() -> tuple[bool, str, str]:
-        try:
-            res = get_adapter(account.platform, payload).sign_in()
-            return bool(res.success), res.message, classify(res, account.platform)
-        except Exception as e:  # noqa: BLE001
-            return False, f"适配器异常: {e}", STATUS_TRANSIENT
-
-    ok, msg, status = attempt()
-    if ok:
-        return True, (f"{msg}；{notes}" if notes else msg), status
-
-    # 瞬时错误：退避重试，重试后若变成确定性失败就跳出，交给下面的常规处理
-    if status == STATUS_TRANSIENT:
-        for i in range(MAX_TRANSIENT_RETRY):
-            time.sleep(RETRY_BASE_SECONDS * (2 ** i) + random.uniform(0, 0.6))
-            ok, msg, status = attempt()
-            if ok:
-                return True, f"网络重试 {i + 1} 次后成功｜{msg}", status
-            if status != STATUS_TRANSIENT:
-                break
-
-    if status == STATUS_AUTH:
-        # 签到接口已明确判定登录态失效：强制续期，不再用宽松的角色接口复核
-        renewed, note = credentials.renew(account, store, user_id, force=True)
-        if renewed:
-            # 服务端单活轮换：兑换后旧 token 立即作废，稍等再重试
-            time.sleep(2)
+        def attempt() -> tuple[bool, str, str]:
             try:
-                res2 = get_adapter(account.platform, _payload(account)).sign_in()
-                ok2 = bool(res2.success)
-                return ok2, f"已自动续期并重试｜{res2.message}", (
-                    STATUS_OK if ok2 else classify(res2, account.platform)
-                )
+                res = get_adapter(account.platform, payload).sign_in()
+                return bool(res.success), res.message, classify(
+                    res, account.platform)
             except Exception as e:  # noqa: BLE001
-                return False, f"已自动续期但重试异常: {e}", STATUS_TRANSIENT
-        return False, f"{msg}；{note}", status
+                return False, f"适配器异常: {e}", STATUS_TRANSIENT
 
-    return False, (f"{msg}；{notes}" if notes else msg), status
+        ok, msg, status = attempt()
+        if ok:
+            return True, (f"{msg}；{notes}" if notes else msg), status
+
+        # 瞬时错误：退避重试，重试后若变成确定性失败就跳出
+        if status == STATUS_TRANSIENT:
+            for i in range(MAX_TRANSIENT_RETRY):
+                time.sleep(RETRY_BASE_SECONDS * (2 ** i)
+                           + random.uniform(0, 0.6))
+                ok, msg, status = attempt()
+                if ok:
+                    return True, f"网络重试 {i + 1} 次后成功｜{msg}", status
+                if status != STATUS_TRANSIENT:
+                    break
+
+        if status == STATUS_AUTH:
+            # 签到接口已明确判定登录态失效：强制续期，不再用宽松健康检查
+            renewed, note = credentials.renew(
+                account, store, user_id, force=True)
+            if renewed:
+                # 服务端单活轮换：兑换后旧 token 立即作废，稍等再重试
+                time.sleep(2)
+                try:
+                    res2 = get_adapter(
+                        account.platform, _payload(account)).sign_in()
+                    ok2 = bool(res2.success)
+                    return ok2, f"已自动续期并重试｜{res2.message}", (
+                        STATUS_OK if ok2 else classify(res2, account.platform)
+                    )
+                except Exception as e:  # noqa: BLE001
+                    return False, f"已自动续期但重试异常: {e}", STATUS_TRANSIENT
+            return False, f"{msg}；{note}", status
+
+        return False, (f"{msg}；{notes}" if notes else msg), status
+
+
+def check_today(account: Account, store: AccountStore | None = None,
+                user_id: str = "local") -> dict:
+    """只读检测「今天是否已签到」，不发签到请求。
+
+    目前只有米游社提供稳定只读接口（luna/info）；库街区/森空岛没有
+    只读签到状态端点，明确返回 supported=False，不伪装成已检测。
+    """
+    if account.platform != "mihoyo":
+        return {
+            "ok": False, "supported": False,
+            "note": "该平台接口不提供只读签到状态，添加后请点「签到」查看结果",
+        }
+
+    from engine.mihoyo import GAMES
+
+    with credentials.account_lock(credentials.lock_key(
+            account.platform, account.credential or {}, account.id)):
+        try:
+            ad = get_adapter(account.platform, _payload(account))
+            if hasattr(ad, "_fetch_roles_ex"):
+                roles, reason = ad._fetch_roles_ex()
+            else:
+                roles, reason = ad._fetch_roles(), ""
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "supported": True, "error": f"检测异常: {e}",
+                    "items": []}
+        if reason == "transient":
+            return {"ok": False, "supported": True,
+                    "error": "查询角色失败（网络异常），请稍后重试", "items": []}
+        if reason == "auth":
+            return {"ok": False, "supported": True,
+                    "error": "Cookie 已失效，请重新登录", "items": []}
+        if not roles:
+            return {"ok": False, "supported": True,
+                    "error": "账号下没有可签到的米游社游戏角色", "items": []}
+
+        items = []
+        seen = set()
+        for role in roles:
+            cfg = GAMES.get(role.get("game_biz", ""))
+            if not cfg:
+                continue
+            uid = role.get("game_uid")
+            if (cfg["key"], uid) in seen:
+                continue
+            seen.add((cfg["key"], uid))
+            signed = ad._is_signed_today(
+                cfg, role.get("region"), uid) if hasattr(
+                    ad, "_is_signed_today") else None
+            items.append({
+                "name": f"{cfg['name']}({uid})",
+                "signed": signed,          # True / False / None(查询失败)
+            })
+
+        if not items:
+            return {"ok": True, "supported": True, "items": [],
+                    "all_signed": False, "signed_count": 0,
+                    "unknown_count": 0, "total": 0,
+                    "note": "账号角色都不在签到配置里，暂无可检测的游戏"}
+        all_signed = all(i["signed"] is True for i in items)
+        if all_signed and store is not None:
+            account.last_ok_date = _today()
+            account.fail_streak = 0
+            try:
+                store.update_account(user_id, account)
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True, "supported": True, "items": items,
+                "all_signed": all_signed,
+                "signed_count": sum(1 for i in items if i["signed"] is True),
+                "unknown_count": sum(1 for i in items if i["signed"] is None),
+                "total": len(items)}
 
 
 def _check_one(account: Account, store: AccountStore | None = None,

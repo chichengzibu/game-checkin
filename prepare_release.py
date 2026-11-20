@@ -54,6 +54,7 @@ RELEASE_GITIGNORE = """# 发布仓库自身的忽略规则（用户数据永不�
 config/vault.json
 config/master.key
 config/games.json
+config/settings.json
 logs/
 *.log
 *.key
@@ -158,6 +159,7 @@ def build() -> None:
             "# 运行时数据目录\n\n"
             "程序首次运行会在此生成 `vault.json`（加密凭据）与 `master.key`（主密钥）。\n"
             "这两个文件**永远不会**被提交到 GitHub（见 .gitignore）。\n"
+            "`settings.json` 是首页保存的定时签到时间（运行时生成，也不上传）。\n"
             "`games.example.json` 是可选的游戏表覆盖示例。\n"
         )
     copied += 2

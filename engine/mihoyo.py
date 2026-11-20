@@ -63,6 +63,7 @@ GAMES = mihoyo_games()
 RC_OK = 0
 RC_ALREADY = -5003      # 今日已签
 RC_NOT_LOGIN = -100     # 登录态失效
+RC_AUTH_CODES = (-100, -111, 10001)   # 均属登录态问题，可尝试 stoken 续期
 RC_CAPTCHA = 1034       # 触发人机验证
 
 
@@ -155,7 +156,7 @@ class MihoyoAdapter(CheckinAdapter):
         code = data.get("retcode")
         if code == RC_OK:
             return data.get("data", {}).get("list", []) or [], ""
-        if code == RC_NOT_LOGIN:
+        if code in RC_AUTH_CODES:
             return [], "auth"
         return [], "failed"
 
@@ -255,7 +256,7 @@ class MihoyoAdapter(CheckinAdapter):
                 add(tag, STATUS_OK, "签到成功")
             elif code == RC_ALREADY:
                 add(tag, STATUS_ALREADY, "今日已签")
-            elif code == RC_NOT_LOGIN:
+            elif code in RC_AUTH_CODES:
                 add(tag, STATUS_AUTH, "Cookie 失效，需重新登录")
             elif code == RC_CAPTCHA:
                 add(tag, STATUS_CAPTCHA, "触发人机验证(1034)，请到米游社 App 处理")
